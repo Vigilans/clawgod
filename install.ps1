@@ -1302,6 +1302,18 @@ Write-OK "OpenAI-compatible proxy created (openai-proxy.cjs)"
 // Absent/failed config \u2192 gate table absent \u2192 all gates default ON, which is
 // exactly the pre-toggle behavior.
 const CLAWGOD_FEATURES_META = {
+  "custom-alias-env": [
+    "custom-model-aliases"
+  ],
+  "custom-alias-schema": [
+    "custom-model-aliases"
+  ],
+  "custom-alias-picker": [
+    "custom-model-aliases"
+  ],
+  "custom-alias-resolve": [
+    "custom-model-aliases"
+  ],
   "agent-teams": [
     "agent-teams"
   ],
@@ -1777,6 +1789,7 @@ const BACKUP = TARGET + '.bak';
 // \u2192 gate passes \u2192 same behavior as before toggles existed.
 
 const FEATURES = {
+  'custom-model-aliases': { desc: 'custom-model-aliases', patchIds: ["custom-alias-env","custom-alias-schema","custom-alias-picker","custom-alias-resolve"] },
   'agent-teams':    { desc: 'Agent Teams always enabled',
                       patchIds: ['agent-teams', 'agent-teams-graph'] },
   'computer-use':   { desc: 'Computer Use unlock',
@@ -1820,6 +1833,138 @@ const gate = (id) => `globalThis.__clawgodPatches?.[${JSON.stringify(id)}]!==!1`
 // \u2500\u2500\u2500 Regex-based patches (version-agnostic) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
 const patches = [
+  {
+    // Let users define model aliases with
+    // ANTHROPIC_DEFAULT_<ALIAS>_{MODEL,NAME,DESCRIPTION}. User, flag, and managed
+    // settings already copy arbitrary env values into process.env; project and
+    // local settings pass through this static allowlist instead. Extend that
+    // boundary so aliases work consistently from every settings scope.
+    //
+    // Source shape:
+    //   for(let[key,value]of Object.entries(env))
+    //     if(allowed.has(key.toUpperCase())) process.env[key]=value
+    id: 'custom-alias-env',
+    toggleable: true,
+    name: 'Allow custom alias env vars from project/local settings',
+    pattern: new RegExp(
+      'for\\(let\\[([\\w$]+),([\\w$]+)\\]of Object\\.entries\\(([\\w$]+)\\)\\)' +
+      'if\\(([\\w$]+)\\.has\\(\\1\\.toUpperCase\\(\\)\\)\\)' +
+      'process\\.env\\[\\1\\]=\\2',
+      'g'
+    ),
+    replacer: (m, key, value, entries, allowlist) => {
+      const customAliasSetting =
+        '/^ANTHROPIC_DEFAULT_[A-Z0-9_]+_' +
+        '(?:MODEL|NAME|DESCRIPTION)$/.test(' + key + '.toUpperCase())';
+      return (
+        `for(let[${key},${value}]of Object.entries(${entries}))` +
+        `if(${allowlist}.has(${key}.toUpperCase())||(${gate('custom-alias-env')}&&${customAliasSetting}))` +
+        `process.env[${key}]=${value}`
+      );
+    },
+    unique: true,
+  },
+  {
+    // Discover ANTHROPIC_DEFAULT_<ALIAS>_MODEL keys, normalize each alias from
+    // ENV_STYLE to kebab-case, and add it to the Agent tool's model enum so custom
+    // aliases pass runtime input validation. Keep the built-in aliases unchanged.
+    id: 'custom-alias-schema',
+    toggleable: true,
+    name: 'Extend Agent model schema with custom aliases',
+    pattern: new RegExp(
+      'model:([\\w$]+)\\.enum\\(\\["sonnet","opus","haiku","fable"\\]\\)' +
+      '\\.optional\\(\\)\\.describe\\(`([^`]+)`\\)',
+      'g'
+    ),
+    replacer: (m, schema, description) => {
+      const envPrefix = 'ANTHROPIC_DEFAULT_';
+      const envSuffix = '_MODEL';
+      const aliasScan =
+        'Object.keys(process.env)' +
+        `.filter(function(k){return/^${envPrefix}[A-Z0-9_]+${envSuffix}$/.test(k)})` +
+        `.map(function(k){return k.slice(${envPrefix.length},-${envSuffix.length})` +
+        '.toLowerCase().replace(/_/g,"-")})' +
+        '.filter(function(k){return!["sonnet","opus","haiku","fable"].includes(k)})';
+      return (
+        `model:(${gate('custom-alias-schema')}?${schema}.enum(["sonnet","opus","haiku","fable",...${aliasScan}])` +
+        `.optional().describe(\`${description} ` +
+        `Custom aliases are configured with ANTHROPIC_DEFAULT_<ALIAS>_MODEL.\`)` +
+        `:${m.slice(6)})`
+      );
+    },
+    unique: true,
+  },
+  {
+    // Add the same normalized aliases to the /model picker. Use the optional
+    // ANTHROPIC_DEFAULT_<ALIAS>_NAME and _DESCRIPTION values for display metadata.
+    id: 'custom-alias-picker',
+    toggleable: true,
+    name: 'Add custom aliases to model picker',
+    pattern: new RegExp(
+      'if\\(([\\w$]+)&&!([\\w$]+)\\.some\\(\\(([\\w$]+)\\)=>\\3\\.value===\\1\\)\\)' +
+      '\\2\\.push\\(\\{value:\\1,' +
+      'label:process\\.env\\.ANTHROPIC_CUSTOM_MODEL_OPTION_NAME\\?\\?\\1,' +
+      'description:process\\.env\\.ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION\\?\\?' +
+      '`Custom model \\(\\$\\{\\1\\}\\)`\\}\\);',
+      'g'
+    ),
+    replacer: (m, customModel, options, option) => {
+      const envPrefix = 'ANTHROPIC_DEFAULT_';
+      const envSuffix = '_MODEL';
+      const aliasScan =
+        'Object.keys(process.env)' +
+        `.filter(function(k){return/^${envPrefix}[A-Z0-9_]+${envSuffix}$/.test(k)})` +
+        `.map(function(k){return k.slice(${envPrefix.length},-${envSuffix.length})` +
+        '.toLowerCase().replace(/_/g,"-")})' +
+        '.filter(function(k){return!["sonnet","opus","haiku","fable"].includes(k)})';
+      const aliasOptions =
+        `for(let _cgAlias of ${aliasScan})` +
+        `if(!${options}.some((_cgOption)=>_cgOption.value===_cgAlias)){` +
+        `let _cgAliasKey="ANTHROPIC_DEFAULT_"+` +
+        `_cgAlias.toUpperCase().replace(/-/g,"_"),` +
+        `_cgDefaultName=_cgAlias.charAt(0).toUpperCase()+_cgAlias.slice(1),` +
+        `_cgAliasName=process.env[_cgAliasKey+"_NAME"]??_cgDefaultName;` +
+        `${options}.push({value:_cgAlias,label:_cgAliasName,` +
+        `description:process.env[_cgAliasKey+"_DESCRIPTION"]??` +
+        `\`Custom \${_cgAliasName} model\`})}`;
+      return m + `if(${gate('custom-alias-picker')}){` + aliasOptions + '}';
+    },
+    unique: true,
+  },
+  {
+    // Resolve a selected custom alias to its ANTHROPIC_DEFAULT_<ALIAS>_MODEL value
+    // before the native built-in-alias switch. Preserve a requested [1m] suffix,
+    // but do not append it when the configured model ID already includes one.
+    id: 'custom-alias-resolve',
+    toggleable: true,
+    name: 'Resolve custom model aliases',
+    pattern: new RegExp(
+      'function ([\\w$]+)\\(([\\w$]+)\\)\\{' +
+      'let ([\\w$]+)=\\2\\.trim\\(\\),([\\w$]+)=\\3\\.toLowerCase\\(\\),' +
+      '([\\w$]+)=([\\w$]+)\\(\\4\\),' +
+      '([\\w$]+)=\\5\\?([\\w$]+)\\(\\4\\)\\.trim\\(\\):\\4;' +
+      'if\\(([\\w$]+)\\(\\7\\)\\)switch\\(\\7\\)\\{',
+      'g'
+    ),
+    replacer: (m, fn, input, trimmed, lower, hasSuffix, suffixCheck, alias, stripSuffix, builtInCheck) => {
+      const normalizedInput =
+        `function ${fn}(${input}){let ${trimmed}=${input}.trim(),` +
+        `${lower}=${trimmed}.toLowerCase(),` +
+        `${hasSuffix}=${suffixCheck}(${lower}),` +
+        `${alias}=${hasSuffix}?${stripSuffix}(${lower}).trim():${lower};`;
+      const customAlias =
+        `let _cgAliasKey="ANTHROPIC_DEFAULT_"+` +
+        `${alias}.toUpperCase().replace(/-/g,"_")+"_MODEL",` +
+        `_cgAliasModel=process.env[_cgAliasKey];` +
+        `if(_cgAliasModel&&!${builtInCheck}(${alias}))` +
+        `return ${hasSuffix}&&!${suffixCheck}(_cgAliasModel)` +
+        `?_cgAliasModel+"[1m]":_cgAliasModel;`;
+      const builtInAlias =
+        `if(${builtInCheck}(${alias}))switch(${alias}){`;
+      return normalizedInput + `if(${gate('custom-alias-resolve')}){` + customAlias + '}' + builtInAlias;
+    },
+    unique: true,
+  },
   {
     id: 'user-type-ant',
     name: 'USER_TYPE \u2192 ant',
