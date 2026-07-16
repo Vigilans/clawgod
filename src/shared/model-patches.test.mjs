@@ -34,3 +34,13 @@ for (const enabled of [false, true]) {
 }
 
 console.log('[model-patches.test] custom alias gates ok');
+
+const metadata = apply('agent-model-metadata', 'async function*spawn({agentDefinition:def,toolUseContext:ctx,model:chosen,}){let perm=permissions(ctx),mode=perm.mode,resolved=resolve(def,chosen,mode,void 0);yield{...ctx.agentId&&{parentAgentId:ctx.agentId},agentType:def.agentType,}}');
+for (const enabled of [false, true]) {
+  const result = await runInNewContext(metadata + ';spawn({agentDefinition:{agentType:"test"},toolUseContext:{},model:"chosen"}).next()', {
+    __clawgodPatches: { 'agent-model-metadata': enabled },
+    permissions: () => ({mode:'default'}), resolve: () => 'resolved-model',
+  });
+  assert.equal(result.value.model, enabled ? 'resolved-model' : undefined);
+}
+console.log('[model-patches.test] resume metadata gate ok');
