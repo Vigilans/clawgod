@@ -36,6 +36,7 @@ const BACKUP = TARGET + '.bak';
 
 const FEATURES = {
   'custom-model-aliases': { desc: 'custom-model-aliases', patchIds: ["custom-alias-env","custom-alias-schema","custom-alias-picker","custom-alias-resolve"] },
+  'hook-update-agent-model': { desc: 'hook-update-agent-model', patchIds: ["hook-input-validation","hook-input-origin","hook-permission-validation"] },
   'send-message-resume-model': { desc: 'send-message-resume-model', patchIds: ["agent-model-metadata","agent-model-restore","agent-model-query"] },
   'agent-teams':    { desc: 'Agent Teams always enabled',
                       patchIds: ['agent-teams', 'agent-teams-graph'] },
@@ -211,6 +212,115 @@ const patches = [
       return normalizedInput + `if(${gate('custom-alias-resolve')}){` + customAlias + '}' + builtInAlias;
     },
     unique: true,
+  },
+  {
+    // The Agent model schema accepts aliases such as "fable", "opus", "sonnet",
+    // and "haiku". A PreToolUse hook can replace one of those aliases with a
+    // concrete model ID such as "gpt-5.6-sol", but the updatedInput validation
+    // introduced in Claude Code 2.1.157 rejects that ID before the Agent runs.
+    //
+    // Keep the same validation for non-Agent tools. The stock diagnostic is absent
+    // through 2.1.156 and is replaced below, so it also marks whether this source
+    // path still needs the Agent-specific patch.
+    id: 'hook-input-validation',
+    toggleable: true,
+    name: 'Bypass Agent PreToolUse updatedInput schema validation',
+    pattern: new RegExp(
+      'if\\(([\\w$]+)\\.updatedInput!==void 0\\)\\{' +
+      'let ([\\w$]+)=([\\w$]+)\\.inputSchema\\.safeParse\\(\\1\\.updatedInput\\),' +
+      '([\\w$]+)=\\2\\.success\\?\\[\\]:\\2\\.error\\.issues\\.filter\\(' +
+      '\\(([\\w$]+)\\)=>\\5\\.code!=="unrecognized_keys"\\);' +
+      'if\\(!\\2\\.success&&\\4\\.length>0\\)\\{' +
+      'let ([\\w$]+)=new ([\\w$]+)\\.ZodError\\(\\4\\),' +
+      '([\\w$]+)=`PreToolUse hook for \\$\\{\\3\\.name\\} returned updatedInput ' +
+      'that failed schema validation: \\$\\{([\\w$]+)\\(\\3\\.name,\\6\\)\\}`;' +
+      '([\\w$]+)\\(\\8,\\{level:"warn"\\}\\),([\\w$]+)=!0,' +
+      'yield\\{type:"hookPermissionResult",hookPermissionResult:\\{' +
+      'behavior:"deny",message:\\8,decisionReason:\\{type:"hook",' +
+      'hookName:`PreToolUse:\\$\\{\\3\\.name\\}`,hookSource:\\1\\.hookSource,' +
+      'reason:\\8\\}\\}\\};continue\\}\\}',
+      'g'
+    ),
+    replacer: (m, result, parsed, tool) =>
+      m.replace(
+        `if(${result}.updatedInput!==void 0){`,
+        `if(${result}.updatedInput!==void 0&&(!(${gate('hook-input-validation')})||${tool}.name!=="Agent")){`
+      ),
+    unique: true,
+    sentinel: 'returned updatedInput that failed schema validation',
+  },
+  {
+    // A second updatedInput validation path after permission handling first
+    // appears in published Claude Code 2.1.193 and is absent through 2.1.191.
+    // These ordered patches record both PreToolUse result forms, then skip the
+    // later validation only when permission handling returns Agent input unchanged.
+    // Non-Agent tools and independent PermissionRequest or canUseTool changes
+    // retain their native validation.
+    id: 'hook-input-marker',
+    name: 'Declare PreToolUse updatedInput origin marker',
+    pattern: new RegExp(
+      'let ([\\w$]+)=!1,([\\w$]+),([\\w$]+),([\\w$]+)=\\[\\],' +
+      '([\\w$]+)=Date\\.now\\(\\);for await\\(let ([\\w$]+) of ([\\w$]+)\\(',
+      'g'
+    ),
+    replacer: (m, stopped, stopReason, hookDecision, durations, startedAt, result, runHooks) =>
+      `let ${stopped}=!1,${stopReason},${hookDecision},${durations}=[],` +
+      `_cgHookInput,${startedAt}=Date.now();` +
+      `for await(let ${result} of ${runHooks}(`,
+    validate: (_, code) =>
+      code.includes('The permission handler returned updatedInput for '),
+    unique: true,
+    sentinel: 'The permission handler returned updatedInput for ',
+  },
+  {
+    id: 'hook-input-origin',
+    toggleable: true,
+    name: 'Record PreToolUse updatedInput origin',
+    pattern: new RegExp(
+      'case"hookPermissionResult":([\\w$]+)=([\\w$]+)\\.hookPermissionResult;' +
+      'break;case"hookUpdatedInput":([\\w$]+)=\\2\\.updatedInput;' +
+      'break;case"preventContinuation":',
+      'g'
+    ),
+    replacer: (m, hookDecision, result, input) => {
+      const permissionResult =
+        `case"hookPermissionResult":${hookDecision}=${result}.hookPermissionResult;` +
+        `${gate('hook-input-origin')}&&${hookDecision}.updatedInput!==void 0&&` +
+        `(_cgHookInput=${hookDecision}.updatedInput);break;`;
+      const updatedInput =
+        `case"hookUpdatedInput":${input}=${result}.updatedInput;${gate('hook-input-origin')}&&(_cgHookInput=${input});` +
+        'break;case"preventContinuation":';
+      return permissionResult + updatedInput;
+    },
+    validate: (_, code) =>
+      code.includes('The permission handler returned updatedInput for '),
+    unique: true,
+    sentinel: 'The permission handler returned updatedInput for ',
+  },
+  {
+    id: 'hook-permission-validation',
+    toggleable: true,
+    name: 'Skip later validation for unchanged Agent PreToolUse input',
+    pattern: new RegExp(
+      '([\\w$]+)\\.updatedInput!==void 0&&!([\\w$]+)\\(\\1\\.updatedInput\\)' +
+      '(?=\\)\\{let [\\w$]+=[\\w$]+\\(([\\w$]+)\\.inputSchema,' +
+      '\\1\\.updatedInput\\))([\\s\\S]{0,1200}?)' +
+      'The permission handler returned updatedInput for ',
+      'g'
+    ),
+    replacer: (m, decision, emptyInput, tool, suffix) => {
+      const validateInput =
+        `${decision}.updatedInput!==void 0&&` +
+        `(!(${gate('hook-permission-validation')})||${tool}.name!=="Agent"||_cgHookInput===void 0||` +
+        `JSON.stringify(${decision}.updatedInput)!==JSON.stringify(_cgHookInput))&&` +
+        `!${emptyInput}(${decision}.updatedInput)`;
+      return (
+        validateInput + suffix +
+        'The permission handler returned updatedInput for '
+      );
+    },
+    unique: true,
+    sentinel: 'The permission handler returned updatedInput for ',
   },
   {
     // SendMessage reconstructs a stopped or evicted ordinary Agent, but Claude
