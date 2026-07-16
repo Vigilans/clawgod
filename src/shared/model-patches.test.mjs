@@ -44,3 +44,26 @@ for (const enabled of [false, true]) {
   assert.equal(result.value.model, enabled ? 'resolved-model' : undefined);
 }
 console.log('[model-patches.test] resume metadata gate ok');
+
+const hook = patches.find(p => p.id === 'hook-input-validation');
+const hookCode = hook.replacer('if(result.updatedInput!==void 0){validate();}', 'result', 'parsed', 'tool');
+const permission = patches.find(p => p.id === 'hook-permission-validation');
+const permissionCode = 'if(' + permission.replacer('', 'decision', 'isEmpty', 'tool', '){validate()} // ');
+for (const enabled of [false, true]) for (const name of ['Agent', 'Bash']) {
+  let calls = 0;
+  runInNewContext(hookCode, {
+    __clawgodPatches: { 'hook-input-validation': enabled },
+    result: {updatedInput:{model:'custom'}}, tool:{name}, validate:()=>calls++,
+  });
+  assert.equal(calls, enabled && name === 'Agent' ? 0 : 1);
+  for (const changed of [false, true]) {
+    calls = 0;
+    runInNewContext(permissionCode, {
+      __clawgodPatches: { 'hook-permission-validation': enabled },
+      decision:{updatedInput:{model:changed?'permission-model':'hook-model'}},
+      _cgHookInput:{model:'hook-model'}, tool:{name}, isEmpty:()=>false, validate:()=>calls++,
+    });
+    assert.equal(calls, enabled && name === 'Agent' && !changed ? 0 : 1);
+  }
+}
+console.log('[model-patches.test] hook validation gates ok');
