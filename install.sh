@@ -1177,6 +1177,15 @@ const CLAWGOD_FEATURES_META = {
   "custom-alias-resolve": [
     "custom-model-aliases"
   ],
+  "agent-model-metadata": [
+    "send-message-resume-model"
+  ],
+  "agent-model-restore": [
+    "send-message-resume-model"
+  ],
+  "agent-model-query": [
+    "send-message-resume-model"
+  ],
   "agent-teams": [
     "agent-teams"
   ],
@@ -1653,6 +1662,7 @@ const BACKUP = TARGET + '.bak';
 
 const FEATURES = {
   'custom-model-aliases': { desc: 'custom-model-aliases', patchIds: ["custom-alias-env","custom-alias-schema","custom-alias-picker","custom-alias-resolve"] },
+  'send-message-resume-model': { desc: 'send-message-resume-model', patchIds: ["agent-model-metadata","agent-model-restore","agent-model-query"] },
   'agent-teams':    { desc: 'Agent Teams always enabled',
                       patchIds: ['agent-teams', 'agent-teams-graph'] },
   'computer-use':   { desc: 'Computer Use unlock',
@@ -1826,6 +1836,79 @@ const patches = [
         `if(${builtInCheck}(${alias}))switch(${alias}){`;
       return normalizedInput + `if(${gate('custom-alias-resolve')}){` + customAlias + '}' + builtInAlias;
     },
+    unique: true,
+  },
+  {
+    // SendMessage reconstructs a stopped or evicted ordinary Agent, but Claude
+    // Code currently drops its spawn-time model override and falls back to the
+    // parent model:
+    // https://github.com/anthropics/claude-code/issues/67794
+    //
+    // Preserve mq()'s already-resolved model in the Agent sidecar so the resume
+    // paths below can reuse the exact model selected for the initial query.
+    id: 'agent-model-metadata',
+    toggleable: true,
+    name: 'Persist resolved Agent model in metadata',
+    pattern: new RegExp(
+      'async function\\*[\\w$]+\\(\\{agentDefinition:[\\w$]+,' +
+      '[\\s\\S]{0,400}?toolUseContext:([\\w$]+),' +
+      '[\\s\\S]{0,400}?model:([\\w$]+),' +
+      '[\\s\\S]{0,1200}?\\}\\)\\{' +
+      'let ([\\w$]+)=[\\w$]+\\(\\1\\),([\\w$]+)=\\3\\.mode,' +
+      '[\\s\\S]{0,300}?([\\w$]+)=[\\w$]+\\(' +
+      '[\\s\\S]{0,300}?,\\2,\\4,' +
+      '[\\s\\S]{0,10000}?\\.\\.\\.([\\w$]+)\\.agentId&&' +
+      '\\{parentAgentId:\\6\\.agentId\\},',
+      'g'
+    ),
+    replacer: (m, toolContext, model, permissionContext, mode, resolvedModel, context) =>
+      m.replace(
+        `...${context}.agentId&&{parentAgentId:${context}.agentId},`,
+        `...${context}.agentId&&{parentAgentId:${context}.agentId},...(${gate('agent-model-metadata')}?{model:${resolvedModel}}:{}),`
+      ),
+    unique: true,
+  },
+  {
+    // On resume, SendMessage first resolves the reconstructed Agent's model for
+    // its task metadata. Supply the model saved above as the existing resolver's
+    // override for ordinary Agents; forks retain their native parent-model path.
+    id: 'agent-model-restore',
+    toggleable: true,
+    name: 'Restore saved Agent model on resume',
+    pattern: new RegExp(
+      '([\\w$]+)\\?\\.isFork===void 0&&\\1\\?\\.agentType===' +
+      '[\\w$]+\\.agentType,([\\w$]+)=[\\w$]+\\?\\?\\(' +
+      '[\\w$]+\\?[\\w$]+:[\\w$]+\\),' +
+      '[\\w$]+=\\1\\?\\.description\\?\\?"\\(resumed\\)"' +
+      '[\\s\\S]{0,1200}?let ([\\w$]+)=[\\w$]+\\([\\w$]+\\),' +
+      '[\\w$]+=[\\w$]+\\([\\w$]+\\(\\2,\\3\\),' +
+      '\\3,void 0,([\\w$]+)\\);',
+      'g'
+    ),
+    replacer: (m, metadata, definition, parentModel, permissionMode) =>
+      m.replace(
+        `${parentModel},void 0,${permissionMode});`,
+        `${parentModel},${gate('agent-model-restore')}?(${metadata}?.model):void 0,${permissionMode});`
+      ),
+    unique: true,
+  },
+  {
+    // That resume-side resolution does not flow into mq(), which independently
+    // resolves its model argument for the resumed query. Pass the same saved
+    // model into mq() for ordinary Agents; forks continue to receive model:void 0.
+    id: 'agent-model-query',
+    toggleable: true,
+    name: 'Pass saved model to resumed Agent query',
+    pattern: new RegExp(
+      '([\\w$]+)\\?\\.isFork===void 0&&\\1\\?\\.agentType===' +
+      '[\\w$]+\\.agentType,[\\w$]+=[\\w$]+\\?\\?\\(' +
+      '[\\w$]+\\?[\\w$]+:[\\w$]+\\),' +
+      '[\\w$]+=\\1\\?\\.description\\?\\?"\\(resumed\\)"' +
+      '[\\s\\S]{0,3000}?model:void 0,override:([\\w$]+)\\?',
+      'g'
+    ),
+    replacer: (m, metadata, isFork) =>
+      m.replace('model:void 0,', `model:${gate('agent-model-query')}?(${isFork}?void 0:${metadata}?.model):void 0,`),
     unique: true,
   },
   {
