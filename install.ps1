@@ -1663,6 +1663,73 @@ const patches = [
     unique: true,
   },
   {
+    // SendMessage reconstructs a stopped or evicted ordinary Agent, but Claude
+    // Code currently drops its spawn-time model override and falls back to the
+    // parent model:
+    // https://github.com/anthropics/claude-code/issues/67794
+    //
+    // Preserve mq()'s already-resolved model in the Agent sidecar so the resume
+    // paths below can reuse the exact model selected for the initial query.
+    name: 'Persist resolved Agent model in metadata',
+    pattern: new RegExp(
+      'async function\\*[\\w$]+\\(\\{agentDefinition:[\\w$]+,' +
+      '[\\s\\S]{0,400}?toolUseContext:([\\w$]+),' +
+      '[\\s\\S]{0,400}?model:([\\w$]+),' +
+      '[\\s\\S]{0,1200}?\\}\\)\\{' +
+      'let ([\\w$]+)=[\\w$]+\\(\\1\\),([\\w$]+)=\\3\\.mode,' +
+      '[\\s\\S]{0,300}?([\\w$]+)=[\\w$]+\\(' +
+      '[\\s\\S]{0,300}?,\\2,\\4,' +
+      '[\\s\\S]{0,10000}?\\.\\.\\.([\\w$]+)\\.agentId&&' +
+      '\\{parentAgentId:\\6\\.agentId\\},',
+      'g'
+    ),
+    replacer: (m, toolContext, model, permissionContext, mode, resolvedModel, context) =>
+      m.replace(
+        `...${context}.agentId&&{parentAgentId:${context}.agentId},`,
+        `...${context}.agentId&&{parentAgentId:${context}.agentId},model:${resolvedModel},`
+      ),
+    unique: true,
+  },
+  {
+    // On resume, SendMessage first resolves the reconstructed Agent's model for
+    // its task metadata. Supply the model saved above as the existing resolver's
+    // override for ordinary Agents; forks retain their native parent-model path.
+    name: 'Restore saved Agent model on resume',
+    pattern: new RegExp(
+      '([\\w$]+)\\?\\.isFork===void 0&&\\1\\?\\.agentType===' +
+      '[\\w$]+\\.agentType,([\\w$]+)=[\\w$]+\\?\\?\\(' +
+      '[\\w$]+\\?[\\w$]+:[\\w$]+\\),' +
+      '[\\w$]+=\\1\\?\\.description\\?\\?"\\(resumed\\)"' +
+      '[\\s\\S]{0,1200}?let ([\\w$]+)=[\\w$]+\\([\\w$]+\\),' +
+      '[\\w$]+=[\\w$]+\\([\\w$]+\\(\\2,\\3\\),' +
+      '\\3,void 0,([\\w$]+)\\);',
+      'g'
+    ),
+    replacer: (m, metadata, definition, parentModel, permissionMode) =>
+      m.replace(
+        `${parentModel},void 0,${permissionMode});`,
+        `${parentModel},${metadata}?.model,${permissionMode});`
+      ),
+    unique: true,
+  },
+  {
+    // That resume-side resolution does not flow into mq(), which independently
+    // resolves its model argument for the resumed query. Pass the same saved
+    // model into mq() for ordinary Agents; forks continue to receive model:void 0.
+    name: 'Pass saved model to resumed Agent query',
+    pattern: new RegExp(
+      '([\\w$]+)\\?\\.isFork===void 0&&\\1\\?\\.agentType===' +
+      '[\\w$]+\\.agentType,[\\w$]+=[\\w$]+\\?\\?\\(' +
+      '[\\w$]+\\?[\\w$]+:[\\w$]+\\),' +
+      '[\\w$]+=\\1\\?\\.description\\?\\?"\\(resumed\\)"' +
+      '[\\s\\S]{0,3000}?model:void 0,override:([\\w$]+)\\?',
+      'g'
+    ),
+    replacer: (m, metadata, isFork) =>
+      m.replace('model:void 0,', `model:${isFork}?void 0:${metadata}?.model,`),
+    unique: true,
+  },
+  {
     name: 'USER_TYPE \u2192 ant',
     pattern: /function ([\w$]+)\(\)\{return"external"\}/g,
     replacer: (m, fn) => `function ${fn}(){return"ant"}`,
