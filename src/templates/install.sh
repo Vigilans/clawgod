@@ -92,6 +92,42 @@ if [ "$NODE_VERSION" -lt 18 ]; then
   exit 1
 fi
 
+# ─── Patch selection ───────────────────────────────────
+
+mkdir -p "$CLAWGOD_DIR" "$BIN_DIR"
+PATCHES_FILE="$CLAWGOD_DIR/patches.json"
+ALL_CAPABILITIES_ENABLED=1
+ENABLED_CAPABILITIES=""
+
+if [ -f "$PATCHES_FILE" ]; then
+  ALL_CAPABILITIES_ENABLED=0
+  ENABLED_CAPABILITIES=$(node - "$PATCHES_FILE" << 'NODE'
+const fs = require('fs');
+const file = process.argv[2];
+let config;
+try {
+  config = JSON.parse(fs.readFileSync(file, 'utf8'));
+} catch (error) {
+  console.error(`Invalid ${file}: ${error.message}`);
+  process.exit(1);
+}
+if (!config || !Array.isArray(config.enabled) || config.enabled.some((id) => typeof id !== 'string')) {
+  console.error(`Invalid ${file}: expected {"enabled": ["capability", ...]}`);
+  process.exit(1);
+}
+process.stdout.write([...new Set(config.enabled)].join('\n'));
+NODE
+  ) || exit 1
+fi
+
+cap_enabled() {
+  [ "$ALL_CAPABILITIES_ENABLED" = "1" ] && return 0
+  case $'\n'"$ENABLED_CAPABILITIES"$'\n' in
+    *$'\n'"$1"$'\n'*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # ─── Ensure Bun (runtime that executes the patched cli.js) ─────────────
 
 BUN_BIN=""
@@ -365,7 +401,7 @@ fi
 
 # ─── Create default configs ───────────────────────────
 
-if [ ! -f "$CLAWGOD_DIR/features.json" ]; then
+if cap_enabled clawgod.features-config && [ ! -f "$CLAWGOD_DIR/features.json" ]; then
   cat > "$CLAWGOD_DIR/features.json" << 'FEATURES_EOF'
 {{CLAWGOD:features.json}}
 FEATURES_EOF
@@ -381,7 +417,7 @@ LEAN_OFF_FLAG="$CLAWGOD_DIR/.lean-disabled"
 LEAN_MAX_FLAG="$CLAWGOD_DIR/.lean-max"
 
 # Handle explicit toggle from CLI (--lean-off / --lean-on / --lean-max)
-if [ "$LEAN_OFF" = "1" ]; then
+if cap_enabled clawgod.lean-settings && [ "$LEAN_OFF" = "1" ]; then
   touch "$LEAN_OFF_FLAG"; rm -f "$LEAN_MAX_FLAG"
   CLAUDE_SETTINGS="$HOME/.claude/settings.json"
   if [ -f "$CLAUDE_SETTINGS" ]; then
@@ -396,13 +432,13 @@ fs.writeFileSync(p,JSON.stringify(s,null,2)+"\n");
 ' "$CLAUDE_SETTINGS" 2>/dev/null
   fi
   info "Lean mode disabled (all tools restored)"
-elif [ "$LEAN_ON" = "1" ]; then
+elif cap_enabled clawgod.lean-settings && [ "$LEAN_ON" = "1" ]; then
   rm -f "$LEAN_OFF_FLAG" "$LEAN_MAX_FLAG"
-elif [ "$LEAN_MAX" = "1" ]; then
+elif cap_enabled clawgod.lean-settings && [ "$LEAN_MAX" = "1" ]; then
   rm -f "$LEAN_OFF_FLAG"; touch "$LEAN_MAX_FLAG"
 fi
 
-if [ ! -f "$LEAN_OFF_FLAG" ]; then
+if cap_enabled clawgod.lean-settings && [ ! -f "$LEAN_OFF_FLAG" ]; then
   CLAUDE_SETTINGS_DIR="$HOME/.claude"
   CLAUDE_SETTINGS="$CLAUDE_SETTINGS_DIR/settings.json"
   mkdir -p "$CLAUDE_SETTINGS_DIR"
@@ -435,7 +471,7 @@ if (changed) fs.writeFileSync(settingsPath, JSON.stringify(s, null, 2) + "\n");
   else
     info "Lean settings applied: on (~/.claude/settings.json)"
   fi
-else
+elif cap_enabled clawgod.lean-settings; then
   dim "Lean mode disabled (claude --lean-on to re-enable)"
 fi
 
@@ -628,21 +664,32 @@ hash -r 2>/dev/null
 echo ""
 echo -e "  ${BOLD}${GREEN}ClawGod installed!${NC}"
 echo ""
-dim "  claude            — Start patched Claude Code (green logo)"
+if cap_enabled clawgod.green-theme; then
+  dim "  claude            — Start patched Claude Code (green logo)"
+else
+  dim "  claude            — Start patched Claude Code"
+fi
 dim "  claude.orig       — Run original unpatched Claude Code"
 echo ""
-dim "  Updates: 'claude update' is patched to route through this installer."
-dim "  Just run it as usual — pulls latest Anthropic release + re-patches"
-dim "  in one step. Extra options:"
-dim "    claude update --version 2.1.180   (install a specific version)"
-dim "    claude update --no-upgrade        (re-patch without downloading)"
+if cap_enabled clawgod.update-command-redirect; then
+  dim "  Updates: 'claude update' is patched to route through this installer."
+  dim "  Just run it as usual — pulls latest Anthropic release + re-patches"
+  dim "  in one step. Extra options:"
+  dim "    claude update --version 2.1.180   (install a specific version)"
+  dim "    claude update --no-upgrade        (re-patch without downloading)"
+else
+  dim "  Updates: clawgod.update-command-redirect is disabled."
+  dim "  Re-apply patches after editing $PATCHES_FILE:"
+  dim "    curl -fsSL https://github.com/0Chencc/clawgod/releases/latest/download/install.sh | bash -s -- --no-upgrade"
+fi
 dim "  To leave clawgod and use vanilla update:"
 dim "    bash ~/.clawgod/install.sh --uninstall"
 echo ""
 warn "  If 'claude' still runs the old version, restart your terminal or run: hash -r"
 echo ""
-dim "  Config: ~/.clawgod/provider.json"
-dim "  Flags:  ~/.clawgod/features.json"
+if [ -f "$PATCHES_FILE" ]; then dim "  Patches: $PATCHES_FILE"; fi
+if cap_enabled clawgod.provider-config; then dim "  Config:  $CLAWGOD_DIR/provider.json"; fi
+if cap_enabled clawgod.features-config; then dim "  Flags:   $CLAWGOD_DIR/features.json"; fi
 echo ""
 dim "  If 'claude' panics with 'Expected CommonJS module to have a function wrapper',"
 dim "  your Bun lags Anthropic's embedded Bun. Upgrade with one of:"

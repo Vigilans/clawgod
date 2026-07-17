@@ -92,6 +92,42 @@ if [ "$NODE_VERSION" -lt 18 ]; then
   exit 1
 fi
 
+# ─── Patch selection ───────────────────────────────────
+
+mkdir -p "$CLAWGOD_DIR" "$BIN_DIR"
+PATCHES_FILE="$CLAWGOD_DIR/patches.json"
+ALL_CAPABILITIES_ENABLED=1
+ENABLED_CAPABILITIES=""
+
+if [ -f "$PATCHES_FILE" ]; then
+  ALL_CAPABILITIES_ENABLED=0
+  ENABLED_CAPABILITIES=$(node - "$PATCHES_FILE" << 'NODE'
+const fs = require('fs');
+const file = process.argv[2];
+let config;
+try {
+  config = JSON.parse(fs.readFileSync(file, 'utf8'));
+} catch (error) {
+  console.error(`Invalid ${file}: ${error.message}`);
+  process.exit(1);
+}
+if (!config || !Array.isArray(config.enabled) || config.enabled.some((id) => typeof id !== 'string')) {
+  console.error(`Invalid ${file}: expected {"enabled": ["capability", ...]}`);
+  process.exit(1);
+}
+process.stdout.write([...new Set(config.enabled)].join('\n'));
+NODE
+  ) || exit 1
+fi
+
+cap_enabled() {
+  [ "$ALL_CAPABILITIES_ENABLED" = "1" ] && return 0
+  case $'\n'"$ENABLED_CAPABILITIES"$'\n' in
+    *$'\n'"$1"$'\n'*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # ─── Ensure Bun (runtime that executes the patched cli.js) ─────────────
 
 BUN_BIN=""
@@ -1158,6 +1194,11 @@ const { homedir } = require('os');
 const { spawnSync } = require('child_process');
 
 const clawgodDir = join(homedir(), '.clawgod');
+const patchesFile = join(clawgodDir, 'patches.json');
+const enabledCapabilities = existsSync(patchesFile)
+  ? new Set(JSON.parse(readFileSync(patchesFile, 'utf8')).enabled)
+  : null;
+const capabilityEnabled = (id) => enabledCapabilities === null || enabledCapabilities.has(id);
 
 // Note: there used to be a "drift detection" block here that scanned
 // ~/.local/share/claude/versions/ for a newer binary and silently re-patched.
@@ -1195,61 +1236,67 @@ const defaultConfig = {
 };
 
 let config = { ...defaultConfig };
-if (existsSync(configFile)) {
-  try {
-    const raw = JSON.parse(readFileSync(configFile, 'utf8'));
-    config = { ...defaultConfig, ...raw };
-  } catch {}
-} else {
-  mkdirSync(providerDir, { recursive: true });
-  writeFileSync(configFile, JSON.stringify(defaultConfig, null, 2) + '\n');
-}
-
-// OpenAI-compatible provider proxy (grok, openai-compat, etc.)
-const _proxyTypes = { grok: 1, 'openai-compat': 1 };
-if (_proxyTypes[config.type]) {
-  let _proxyKey = config.apiKey || '';
-  if (!_proxyKey && config.type === 'grok') {
+if (capabilityEnabled('clawgod.provider-config')) {
+  if (existsSync(configFile)) {
     try {
-      const _gs = JSON.parse(readFileSync(join(homedir(), '.grok', 'user-settings.json'), 'utf8'));
-      _proxyKey = _gs.apiKey || '';
+      const raw = JSON.parse(readFileSync(configFile, 'utf8'));
+      config = { ...defaultConfig, ...raw };
     } catch {}
-    if (!_proxyKey) _proxyKey = process.env.GROK_API_KEY || '';
+  } else {
+    mkdirSync(providerDir, { recursive: true });
+    writeFileSync(configFile, JSON.stringify(defaultConfig, null, 2) + '\n');
   }
-  if (_proxyKey) {
-    const { startProxy } = require('./openai-proxy.cjs');
-    const _proxy = startProxy({
-      apiKey: _proxyKey,
-      baseURL: config.baseURL || (config.type === 'grok' ? 'https://api.x.ai/v1' : ''),
-      model: config.model || '',
-    });
-    process.env.ANTHROPIC_API_KEY = 'proxy-passthrough';
-    process.env.ANTHROPIC_BASE_URL = 'http://127.0.0.1:' + _proxy.port;
-    process.env.ANTHROPIC_AUTH_TOKEN = 'proxy-passthrough';
+
+  // OpenAI-compatible provider proxy (grok, openai-compat, etc.)
+  const _proxyTypes = { grok: 1, 'openai-compat': 1 };
+  if (_proxyTypes[config.type]) {
+    let _proxyKey = config.apiKey || '';
+    if (!_proxyKey && config.type === 'grok') {
+      try {
+        const _gs = JSON.parse(readFileSync(join(homedir(), '.grok', 'user-settings.json'), 'utf8'));
+        _proxyKey = _gs.apiKey || '';
+      } catch {}
+      if (!_proxyKey) _proxyKey = process.env.GROK_API_KEY || '';
+    }
+    if (_proxyKey) {
+      const { startProxy } = require('./openai-proxy.cjs');
+      const _proxy = startProxy({
+        apiKey: _proxyKey,
+        baseURL: config.baseURL || (config.type === 'grok' ? 'https://api.x.ai/v1' : ''),
+        model: config.model || '',
+      });
+      process.env.ANTHROPIC_API_KEY = 'proxy-passthrough';
+      process.env.ANTHROPIC_BASE_URL = 'http://127.0.0.1:' + _proxy.port;
+      process.env.ANTHROPIC_AUTH_TOKEN = 'proxy-passthrough';
+      if (config.model) process.env.ANTHROPIC_MODEL = config.model;
+      if (config.smallModel) process.env.ANTHROPIC_SMALL_FAST_MODEL = config.smallModel;
+      process.env.CLAUDE_CODE_ATTRIBUTION_HEADER = '0';
+      process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS ??= '1';
+      process.on('exit', function () { try { _proxy.stop(); } catch {} });
+      process.stderr.write('[clawgod] OpenAI-compat proxy on port ' + _proxy.port + ' (type: ' + config.type + ')\n');
+      config = { ...defaultConfig };  // prevent fallthrough to apiKey/baseURL injection below
+    } else {
+      process.stderr.write('[clawgod] Warning: type=' + config.type + ' but no API key found\n');
+    }
+  }
+
+  const hasProviderApiKey = !!config.apiKey;
+
+  if (hasProviderApiKey) {
+    process.env.ANTHROPIC_API_KEY = config.apiKey;
+    if (config.baseURL) process.env.ANTHROPIC_BASE_URL = config.baseURL;
     if (config.model) process.env.ANTHROPIC_MODEL = config.model;
     if (config.smallModel) process.env.ANTHROPIC_SMALL_FAST_MODEL = config.smallModel;
-    process.env.CLAUDE_CODE_ATTRIBUTION_HEADER = '0';
-    process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS ??= '1';
-    process.on('exit', function () { try { _proxy.stop(); } catch {} });
-    process.stderr.write('[clawgod] OpenAI-compat proxy on port ' + _proxy.port + ' (type: ' + config.type + ')\n');
-    config = { ...defaultConfig };  // prevent fallthrough to apiKey/baseURL injection below
-  } else {
-    process.stderr.write('[clawgod] Warning: type=' + config.type + ' but no API key found\n');
+    if (config.baseURL && !/anthropic\.com/i.test(config.baseURL)) {
+      process.env.ANTHROPIC_AUTH_TOKEN ??= config.apiKey;
+    }
+  } else if (config.baseURL && config.baseURL !== defaultConfig.baseURL) {
+    process.env.ANTHROPIC_BASE_URL ??= config.baseURL;
   }
-}
 
-const hasProviderApiKey = !!config.apiKey;
-
-if (hasProviderApiKey) {
-  process.env.ANTHROPIC_API_KEY = config.apiKey;
-  if (config.baseURL) process.env.ANTHROPIC_BASE_URL = config.baseURL;
-  if (config.model) process.env.ANTHROPIC_MODEL = config.model;
-  if (config.smallModel) process.env.ANTHROPIC_SMALL_FAST_MODEL = config.smallModel;
-  if (config.baseURL && !/anthropic\.com/i.test(config.baseURL)) {
-    process.env.ANTHROPIC_AUTH_TOKEN ??= config.apiKey;
+  if (config.timeoutMs) {
+    process.env.API_TIMEOUT_MS ??= String(config.timeoutMs);
   }
-} else if (config.baseURL && config.baseURL !== defaultConfig.baseURL) {
-  process.env.ANTHROPIC_BASE_URL ??= config.baseURL;
 }
 
 // Third-party Anthropic-compatible proxies (DeepSeek / OneAPI / Bedrock /
@@ -1260,7 +1307,7 @@ if (hasProviderApiKey) {
 // so the cached prefix changes every request and cache hit rate drops to
 // zero. Auto-disable the header whenever baseURL points away from Anthropic.
 // Users can force re-enable with CLAUDE_CODE_ATTRIBUTION_HEADER=1 if needed.
-if (config.baseURL && !/anthropic\.com/i.test(config.baseURL)) {
+if (capabilityEnabled('system-prompt.remove-attribution-header') && config.baseURL && !/anthropic\.com/i.test(config.baseURL)) {
   process.env.CLAUDE_CODE_ATTRIBUTION_HEADER ??= '0';
   // Third-party proxies (headroom, etc.) often require remote control.
   // Lean mode sets disableRemoteControl:true in settings.json — undo it
@@ -1277,9 +1324,6 @@ if (config.baseURL && !/anthropic\.com/i.test(config.baseURL)) {
   } catch {}
 }
 
-if (config.timeoutMs) {
-  process.env.API_TIMEOUT_MS ??= String(config.timeoutMs);
-}
 process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC ??= '1';
 process.env.DISABLE_INSTALLATION_CHECKS ??= '1';
 // Use system ripgrep (extracted vendor rg path was build-time-baked; system
@@ -1287,7 +1331,7 @@ process.env.DISABLE_INSTALLATION_CHECKS ??= '1';
 process.env.USE_BUILTIN_RIPGREP ??= '1';
 
 const featuresFile = join(providerDir, 'features.json');
-if (!process.env.CLAUDE_INTERNAL_FC_OVERRIDES && existsSync(featuresFile)) {
+if (capabilityEnabled('clawgod.features-config') && !process.env.CLAUDE_INTERNAL_FC_OVERRIDES && existsSync(featuresFile)) {
   try {
     const raw = readFileSync(featuresFile, 'utf8');
     JSON.parse(raw);
@@ -1310,7 +1354,7 @@ if (_realExecPath !== process.execPath) {
 }
 
 // Lean mode toggle — --lean-off / --lean-on / --lean-max
-if (process.argv.includes('--lean-off') || process.argv.includes('--lean-on') || process.argv.includes('--lean-max')) {
+if (capabilityEnabled('clawgod.lean-settings') && (process.argv.includes('--lean-off') || process.argv.includes('--lean-on') || process.argv.includes('--lean-max'))) {
   const _leanOff = join(clawgodDir, '.lean-disabled');
   const _leanMax = join(clawgodDir, '.lean-max');
   const _leanSettings = join(homedir(), '.claude', 'settings.json');
@@ -1363,7 +1407,7 @@ if (process.argv.includes('--lean-off') || process.argv.includes('--lean-on') ||
 }
 
 // Update check — cached, non-blocking, 24h interval
-try {
+if (capabilityEnabled('clawgod.update-notification')) try {
   const _ucFile = join(clawgodDir, '.update-check');
   const _verFile = join(clawgodDir, '.clawgod-version');
   if (existsSync(_verFile)) {
@@ -1406,6 +1450,10 @@ import { fileURLToPath } from 'url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TARGET = join(__dirname, 'cli.original.cjs');
 const BACKUP = TARGET + '.bak';
+const patchesFile = join(__dirname, 'patches.json');
+const enabledCapabilities = existsSync(patchesFile)
+  ? new Set(JSON.parse(readFileSync(patchesFile, 'utf8')).enabled)
+  : null;
 
 // ─── Regex-based patches (version-agnostic) ──────────────
 
@@ -1420,6 +1468,7 @@ const patches = [
     // Source shape:
     //   for(let[key,value]of Object.entries(env))
     //     if(allowed.has(key.toUpperCase())) process.env[key]=value
+    capability: 'features.custom-model-aliases',
     name: 'Allow custom alias env vars from project/local settings',
     pattern: new RegExp(
       'for\\(let\\[([\\w$]+),([\\w$]+)\\]of Object\\.entries\\(([\\w$]+)\\)\\)' +
@@ -1443,6 +1492,7 @@ const patches = [
     // Discover ANTHROPIC_DEFAULT_<ALIAS>_MODEL keys, normalize each alias from
     // ENV_STYLE to kebab-case, and add it to the Agent tool's model enum so custom
     // aliases pass runtime input validation. Keep the built-in aliases unchanged.
+    capability: 'features.custom-model-aliases',
     name: 'Extend Agent model schema with custom aliases',
     pattern: new RegExp(
       'model:([\\w$]+)\\.enum\\(\\["sonnet","opus","haiku","fable"\\]\\)' +
@@ -1469,6 +1519,7 @@ const patches = [
   {
     // Add the same normalized aliases to the /model picker. Use the optional
     // ANTHROPIC_DEFAULT_<ALIAS>_NAME and _DESCRIPTION values for display metadata.
+    capability: 'features.custom-model-aliases',
     name: 'Add custom aliases to model picker',
     pattern: new RegExp(
       'if\\(([\\w$]+)&&!([\\w$]+)\\.some\\(\\(([\\w$]+)\\)=>\\3\\.value===\\1\\)\\)' +
@@ -1512,6 +1563,7 @@ const patches = [
     // Resolve a selected custom alias to its ANTHROPIC_DEFAULT_<ALIAS>_MODEL value
     // before the native built-in-alias switch. Preserve a requested [1m] suffix,
     // but do not append it when the configured model ID already includes one.
+    capability: 'features.custom-model-aliases',
     name: 'Resolve custom model aliases',
     pattern: new RegExp(
       'function ([\\w$]+)\\(([\\w$]+)\\)\\{' +
@@ -1549,6 +1601,7 @@ const patches = [
     // Keep the same validation for non-Agent tools. The stock diagnostic is absent
     // through 2.1.156 and is replaced below, so it also marks whether this source
     // path still needs the Agent-specific patch.
+    capability: 'fixes.hook-update-agent-model',
     name: 'Bypass Agent PreToolUse updatedInput schema validation',
     pattern: new RegExp(
       'if\\(([\\w$]+)\\.updatedInput!==void 0\\)\\{' +
@@ -1586,6 +1639,7 @@ const patches = [
     // later validation only when permission handling returns Agent input unchanged.
     // Non-Agent tools and independent PermissionRequest or canUseTool changes
     // retain their native validation.
+    capability: 'fixes.hook-update-agent-model',
     name: 'Declare PreToolUse updatedInput origin marker',
     pattern: new RegExp(
       'let ([\\w$]+)=!1,([\\w$]+),([\\w$]+),([\\w$]+)=\\[\\],' +
@@ -1602,6 +1656,7 @@ const patches = [
     sentinel: 'The permission handler returned updatedInput for ',
   },
   {
+    capability: 'fixes.hook-update-agent-model',
     name: 'Record PreToolUse updatedInput origin',
     pattern: new RegExp(
       'case"hookPermissionResult":([\\w$]+)=([\\w$]+)\\.hookPermissionResult;' +
@@ -1625,6 +1680,7 @@ const patches = [
     sentinel: 'The permission handler returned updatedInput for ',
   },
   {
+    capability: 'fixes.hook-update-agent-model',
     name: 'Skip later validation for unchanged Agent PreToolUse input',
     pattern: new RegExp(
       '([\\w$]+)\\.updatedInput!==void 0&&!([\\w$]+)\\(\\1\\.updatedInput\\)' +
@@ -1655,6 +1711,7 @@ const patches = [
     //
     // Preserve mq()'s already-resolved model in the Agent sidecar so the resume
     // paths below can reuse the exact model selected for the initial query.
+    capability: 'fixes.send-message-resume-model',
     name: 'Persist resolved Agent model in metadata',
     pattern: new RegExp(
       'async function\\*[\\w$]+\\(\\{agentDefinition:[\\w$]+,' +
@@ -1679,6 +1736,7 @@ const patches = [
     // On resume, SendMessage first resolves the reconstructed Agent's model for
     // its task metadata. Supply the model saved above as the existing resolver's
     // override for ordinary Agents; forks retain their native parent-model path.
+    capability: 'fixes.send-message-resume-model',
     name: 'Restore saved Agent model on resume',
     pattern: new RegExp(
       '([\\w$]+)\\?\\.isFork===void 0&&\\1\\?\\.agentType===' +
@@ -1701,6 +1759,7 @@ const patches = [
     // That resume-side resolution does not flow into mq(), which independently
     // resolves its model argument for the resumed query. Pass the same saved
     // model into mq() for ordinary Agents; forks continue to receive model:void 0.
+    capability: 'fixes.send-message-resume-model',
     name: 'Pass saved model to resumed Agent query',
     pattern: new RegExp(
       '([\\w$]+)\\?\\.isFork===void 0&&\\1\\?\\.agentType===' +
@@ -1715,6 +1774,7 @@ const patches = [
     unique: true,
   },
   {
+    capability: 'features.anthropic-user-type',
     name: 'USER_TYPE → ant',
     pattern: /function ([\w$]+)\(\)\{return"external"\}/g,
     replacer: (m, fn) => `function ${fn}(){return"ant"}`,
@@ -1737,6 +1797,7 @@ const patches = [
     replacer: (m, fn) => `function ${fn}(){return!0}`,
   },
   {
+    capability: 'clawgod.features-config',
     name: 'GrowthBook env overrides',
     pattern: /function ([\w$]+)\(\)\{if\(!([\w$]+)\)=!0;return ([\w$]+)\}/g,
     replacer: (m, fn, flag, val) =>
@@ -1753,6 +1814,7 @@ const patches = [
     //   getEnvironmentOverrides(){if(this.environmentOverridesParsed)return this.environmentOverrides;return this.environmentOverridesParsed=!0,this.environmentOverrides;let e=this.deps.readEnvironmentOverrides();if(!e)return this.environmentOverrides;try{this.environmentOverrides=Ce(e),p(`GrowthBook: Using env var overrides for ${...}`)}catch{p(`GrowthBook: Failed to parse CLAUDE_INTERNAL_FC_OVERRIDES: ${e}`,...)}return this.environmentOverrides}
     // Patch removes the short-circuit second return so the body reaches the
     // env-var read. Cross-version: match the lazy-parse idiom (flag=!0,value).
+    capability: 'clawgod.features-config',
     name: 'GrowthBook env overrides (graph dead-code fix)',
     pattern: /return this\.environmentOverridesParsed=!0,this\.environmentOverrides;(?=let e=this\.deps\.readEnvironmentOverrides\(\);)/g,
     replacer: () => '',
@@ -1760,6 +1822,7 @@ const patches = [
     optional: true,
   },
   {
+    capability: 'clawgod.features-config',
     name: 'GrowthBook config overrides',
     pattern: /function ([\w$]+)\(\)\{return\}(function)/g,
     replacer: (m, fn, next) =>
@@ -1772,6 +1835,7 @@ const patches = [
     },
   },
   {
+    capability: 'features.agent-teams',
     name: 'Agent Teams always enabled',
     pattern: /function ([\w$]+)\(\)\{if\(![\w$]+\(process\.env\.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS\)&&![\w$]+\(\)\)return!1;if\(![\w$]+\("tengu_amber_flint",!0\)\)return!1;return!0\}/g,
     replacer: (m, fn) => `function ${fn}(){return!0}`,
@@ -1783,17 +1847,20 @@ const patches = [
     //   function s(){if(!e.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS&&!i())return!1;if(!t("tengu_amber_flint",!0))return!1;return!0}
     // Match the flag-gate by the tengu_amber_flint + return!1 shape, tolerant
     // of the identifier set and the argv helper.
+    capability: 'features.agent-teams',
     name: 'Agent Teams always enabled (graph)',
     pattern: /function ([\w$]+)\(\)\{if\(![\w$]+\.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS&&![\w$]+\(\)\)return!1;if\(![\w$]+\("tengu_amber_flint",!0\)\)return!1;return!0\}/g,
     replacer: (m, fn) => `function ${fn}(){return!0}`,
     optional: true,
   },
   {
+    capability: 'features.computer-use',
     name: 'Computer Use subscription bypass',
     pattern: /function ([\w$]+)\(\)\{let [\w$]+=[\w$]+\(\);return [\w$]+==="max"\|\|[\w$]+==="pro"\}/g,
     replacer: (m, fn) => `function ${fn}(){return!0}`,
   },
   {
+    capability: 'features.computer-use',
     name: 'Computer Use default enabled',
     pattern: /([\w$]+=)\{enabled:!1,pixelValidation/g,
     replacer: (m, prefix) => `${prefix}{enabled:!0,pixelValidation`,
@@ -1804,6 +1871,7 @@ const patches = [
     // The middle metadata block changed from a literal description to a getter,
     // and the gate switched from a literal !1 to a GrowthBook-flag-check function call.
     // Match both.
+    capability: 'features.ultraplan',
     name: 'Ultraplan enable',
     pattern: /(name:"ultraplan",[\s\S]{1,500}?argumentHint:"<prompt>",isEnabled:\(\)=>)(?:!1|[\w$]+\(\))/g,
     replacer: (m, prefix) => `${prefix}!0`,
@@ -1819,12 +1887,14 @@ const patches = [
     //   function rQt(){return Fot()?.enabled===!0&&ru()&&!J6()}
     //   Patch rQt to always return true so ultrareview is unlocked.
     //   Also match the old direct-literal form for <=2.1.213 compat.
+    capability: 'features.ultrareview',
     name: 'Ultrareview enable (rQt gate)',
     pattern: /function ([\w$]+)\(\)\{return ([\w$]+)\(\)\?\.enabled===!0&&[\w$]+\(\)&&![\w$]+\(\)\}/g,
     replacer: (m, fn) => `function ${fn}(){return!0}`,
     optional: true,
   },
   {
+    capability: 'features.ultrareview',
     name: 'Ultrareview enable (direct literal, <=2.1.213)',
     pattern: /function ([\w$]+)\(\)\{return ([\w$]+)\("tengu_review_bughunter_config",null\)(\?\.enabled===!0)?\}/g,
     replacer: (m, fn, getter, gate) =>
@@ -1834,11 +1904,13 @@ const patches = [
     optional: true,
   },
   {
+    capability: 'features.computer-use',
     name: 'Computer Use gate bypass',
     pattern: /function ([\w$]+)\(\)\{return [\w$]+\(\)&&[\w$]+\(\)\.enabled\}/g,
     replacer: (m, fn) => `function ${fn}(){return!0}`,
   },
   {
+    capability: 'features.voice-mode',
     name: 'Voice Mode enable (bypass GrowthBook kill)',
     pattern: /function ([\w$]+)\(\)\{return![\w$]+\("tengu_amber_quartz_disabled",!1\)\}/g,
     replacer: (m, fn) => `function ${fn}(){return!0}`,
@@ -1851,6 +1923,7 @@ const patches = [
     //   (the next 300 chars must contain !=="firstParty") and not unrelated
     //   if(!fn(x))return!1; patterns elsewhere.
     //   Not present in ≤v2.1.149 (provider gate was inline).
+    capability: 'features.auto-mode',
     name: 'Auto-mode unlock for third-party API (provider helper gate)',
     pattern: /if\(!([\w$]+)\(([\w$]+)\)\)return!1;(?=(?:(?!function\s).){0,300}!=="firstParty")/g,
     replacer: () => '',
@@ -1862,6 +1935,7 @@ const patches = [
     // v2.1.214+: if(r!=="firstParty"&&!d6(r)&&(t==="claude-opus-4-6"||…))return!1;
     //   "anthropicAws" replaced by helper function !fn(var).
     //   Match both: \1!=="anthropicAws" OR !fn(\1).
+    capability: 'features.auto-mode',
     name: 'Auto-mode unlock for third-party API (inline gate)',
     pattern: /if\(([\w$]+)!=="firstParty"&&(?:\1!=="anthropicAws"|![\w$]+\(\1\))[^;]*\)return!1;/g,
     replacer: () => '',
@@ -1894,6 +1968,7 @@ const patches = [
     //   .action(n(async(u)=>{…}))          v2.1.238+
     // Match any one-letter minified helper via `identifier(` rather than
     // hardcoding a name, so a future rename keeps matching.
+    capability: 'clawgod.update-command-redirect',
     name: "Redirect `claude update` to clawgod self-update",
     pattern: /(\.command\("update"\)\.alias\("upgrade"\)\.description\("[^"]+"\))(\.action\((?:[A-Za-z_$][\w$]*\()?async\([^)]*\)=>\{)/g,
     replacer: (m, chain, action) => {
@@ -1932,36 +2007,43 @@ const patches = [
   // ── 绿色主题 (patch 标识) ──
 
   {
+    capability: 'clawgod.green-theme',
     name: 'Logo + brand color → green (RGB dark)',
     pattern: /clawd_body:"rgb\(215,119,87\)"/g,
     replacer: () => 'clawd_body:"rgb(34,197,94)"',
   },
   {
+    capability: 'clawgod.green-theme',
     name: 'Logo + brand color → green (ANSI)',
     pattern: /clawd_body:"ansi:redBright"/g,
     replacer: () => 'clawd_body:"ansi:greenBright"',
   },
   {
+    capability: 'clawgod.green-theme',
     name: 'Theme claude color → green (dark)',
     pattern: /claude:"rgb\(215,119,87\)"/g,
     replacer: () => 'claude:"rgb(34,197,94)"',
   },
   {
+    capability: 'clawgod.green-theme',
     name: 'Theme claude color → green (light)',
     pattern: /claude:"rgb\(255,153,51\)"/g,
     replacer: () => 'claude:"rgb(22,163,74)"',
   },
   {
+    capability: 'clawgod.green-theme',
     name: 'Shimmer → green',
     pattern: /claudeShimmer:"rgb\(2[34]5,1[45]9,1[12]7\)"/g,
     replacer: () => 'claudeShimmer:"rgb(74,222,128)"',
   },
   {
+    capability: 'clawgod.green-theme',
     name: 'Shimmer light → green',
     pattern: /claudeShimmer:"rgb\(255,183,101\)"/g,
     replacer: () => 'claudeShimmer:"rgb(34,197,94)"',
   },
   {
+    capability: 'clawgod.green-theme',
     name: 'Hex brand color → green',
     pattern: /#da7756/g,
     replacer: () => '#22c55e',
@@ -2009,6 +2091,7 @@ const patches = [
     //
     // Patched:
     //   if(L.length===0&&R.length>0){at("input_image_drag","read_failed");if(d&&D.length===0){m();return}D.push(...R)}
+    capability: 'fixes.macos-image-paste',
     name: 'macOS Cmd+V image paste fallback to clipboard read',
     pattern: /if\(([\w$]+)\.length===0&&([\w$]+)\.length>0\)([\w$]+)\("input_image_drag","read_failed"\),([\w$]+)\.push\(\.\.\.\2\)/g,
     replacer: (m, L, R, at, D) =>
@@ -2055,6 +2138,7 @@ const patches = [
     //
     // Patch: replace entire function body to always use ASCII apostrophe
     // and pass through the date string unmodified.
+    capability: 'system-prompt.remove-geo-steganography',
     name: 'Neutralize geo-steganography in date string (qla)',
     pattern: /function ([\w$]+)\([\w$]+\)\{let [\w$]+=[\w$]+\(\),[\w$]+=[\w$]+\([\w$]+\?\.[\w$]+\?\?!1,[\w$]+\?\.[\w$]+\?\?!1\),[\w$]+=[\w$]+\?\.[\w$]+\?[\w$]+\.replaceAll\("-","\/"\):[\w$]+;return`Today\$\{[\w$]+\}s date is \$\{[\w$]+\}\.`\}/g,
     replacer: (m) => {
@@ -2078,6 +2162,7 @@ const patches = [
     //     return{known:edp().some(...),labKw:tdp().some(...),cnTZ:n,host:e}}
     //
     // Patch: always return null (same as firstParty path), disabling all detection.
+    capability: 'system-prompt.remove-geo-steganography',
     name: 'Neutralize geo-detection probe (rdp)',
     pattern: /function ([\w$]+)\(\)\{if\([\w$]+\(\)\)return null;let [\w$]+=[\w$]+\(\),[\w$]+=[\w$]+\(\),[\w$]+=[\w$]+==="Asia\/Shanghai"\|\|[\w$]+==="Asia\/Urumqi"[\s\S]*?\}\}/g,
     replacer: (m) => {
@@ -2103,6 +2188,7 @@ const patches = [
     // the bundle depending on bundler version. Match both forms.
     // Defense-in-depth — qla patch above already bypasses the call to odp,
     // but if qla's shape changes this keeps odp harmless.
+    capability: 'system-prompt.remove-geo-steganography',
     name: 'Neutralize apostrophe steganography (odp)',
     pattern: new RegExp(
       'function ([\\w$]+)\\(([\\w$]+),([\\w$]+)\\)\\{' +
@@ -2122,18 +2208,21 @@ const patches = [
   // ── 限制移除 ──
 
   {
+    capability: 'system-prompt.remove-cyber-risk-instruction',
     name: 'Remove CYBER_RISK_INSTRUCTION',
     pattern: /([\w$]+)="IMPORTANT: Assist with authorized security testing[^"]*"/g,
     replacer: (m, varName) => `${varName}=""`,
     sentinel: 'Assist with authorized security testing',
   },
   {
+    capability: 'system-prompt.remove-url-generation-restriction',
     name: 'Remove URL generation restriction',
     pattern: /\n\$\{[\w$]+\}\nIMPORTANT: You must NEVER generate or guess URLs[^.]*\. You may use URLs provided by the user in their messages or local files\./g,
     replacer: () => '',
     sentinel: 'IMPORTANT: You must NEVER generate or guess URLs',
   },
   {
+    capability: 'system-prompt.remove-cautious-actions',
     name: 'Remove cautious actions section',
     // v2.1.88-~v2.1.122: function GSY(){return`# Executing actions...`}
     // v2.1.123+: function _j3(H){if(LE8(H)==="compact")return`# Executing...short`;return`# Executing...long`}
@@ -2142,6 +2231,7 @@ const patches = [
     sentinel: '# Executing actions with care',
   },
   {
+    capability: 'features.hide-login-notice',
     name: 'Remove "Not logged in" notice',
     pattern: /Not logged in\. Run [\w ]+ to authenticate\./g,
     replacer: () => '',
@@ -2155,6 +2245,7 @@ const patches = [
     // v2.1.92+        : fn()!=="ant"&&paY.has(q.attachment.type) — paY is an empty Set
     //                    in v2.1.110, so this filter is effectively a no-op; patch anyway
     //                    to guard against paY being populated in future versions.
+    capability: 'features.anthropic-user-type',
     name: 'Attachment filter bypass',
     pattern: /([\w$]+)\(\)!=="ant"(&&[\w$]+\.has\([\w$]+\.attachment\.type\)|\)\{if\([\w$]+\.attachment\.type==="hook_additional_context")/g,
     replacer: (m) => m.replace(/([\w$]+)\(\)!=="ant"/, 'false'),
@@ -2162,6 +2253,7 @@ const patches = [
   },
   {
     // Legacy (≤v2.1.91) ternary form: fn()!=="ant"?tRY(_,sRY(K)):K
+    capability: 'features.anthropic-user-type',
     name: 'Message list filter bypass (legacy ternary)',
     pattern: /([\w$]+)\(\)!=="ant"\?([\w$]+)\(([\w$]+),([\w$]+)\(([\w$]+)\)\):([\w$]+)/g,
     replacer: (m, fn, tRY, underscore, sRY, K, fallback) => fallback,
@@ -2170,6 +2262,7 @@ const patches = [
   {
     // v2.1.92+ (s_8): if(fn()==="ant")return _;let z=...;return FaY(_,z)
     // Flip the guard so non-ant users also return the pre-filtered list.
+    capability: 'features.anthropic-user-type',
     name: 'Message list filter bypass (s_8 form)',
     pattern: /if\(([\w$]+)\(\)==="ant"\)return ([\w$]+);let ([\w$]+)=([\w$]+) instanceof Set\?\4:([\w$]+)\(\4\);return ([\w$]+)\(\2,\3\)/g,
     replacer: (m, fn, ret) => `return ${ret}`,
@@ -2274,9 +2367,15 @@ function collectMatches(p) {
   return out;
 }
 
-let applied = 0, skipped = 0, failed = 0;
+let applied = 0, skipped = 0, disabled = 0, failed = 0;
 
 for (const p of patches) {
+  if (p.capability && enabledCapabilities !== null && !enabledCapabilities.has(p.capability)) {
+    console.log(`  ⏸  ${p.name} (${p.capability} disabled)`);
+    disabled++;
+    continue;
+  }
+
   const fileMatches = collectMatches(p);
 
   /*
@@ -2362,7 +2461,7 @@ for (const p of patches) {
 }
 
 console.log(`\n${'─'.repeat(55)}`);
-console.log(`  Result: ${applied} applied, ${skipped} skipped, ${failed} failed`);
+console.log(`  Result: ${applied} applied, ${skipped} skipped, ${disabled} disabled, ${failed} failed`);
 
 if (!dryRun && !verify && applied > 0) {
   // backup the entry (legacy semantics); graph writes all files in place
@@ -2394,7 +2493,7 @@ fi
 
 # ─── Create default configs ───────────────────────────
 
-if [ ! -f "$CLAWGOD_DIR/features.json" ]; then
+if cap_enabled clawgod.features-config && [ ! -f "$CLAWGOD_DIR/features.json" ]; then
   cat > "$CLAWGOD_DIR/features.json" << 'FEATURES_EOF'
 {
   "tengu_harbor": true,
@@ -2422,7 +2521,7 @@ LEAN_OFF_FLAG="$CLAWGOD_DIR/.lean-disabled"
 LEAN_MAX_FLAG="$CLAWGOD_DIR/.lean-max"
 
 # Handle explicit toggle from CLI (--lean-off / --lean-on / --lean-max)
-if [ "$LEAN_OFF" = "1" ]; then
+if cap_enabled clawgod.lean-settings && [ "$LEAN_OFF" = "1" ]; then
   touch "$LEAN_OFF_FLAG"; rm -f "$LEAN_MAX_FLAG"
   CLAUDE_SETTINGS="$HOME/.claude/settings.json"
   if [ -f "$CLAUDE_SETTINGS" ]; then
@@ -2437,13 +2536,13 @@ fs.writeFileSync(p,JSON.stringify(s,null,2)+"\n");
 ' "$CLAUDE_SETTINGS" 2>/dev/null
   fi
   info "Lean mode disabled (all tools restored)"
-elif [ "$LEAN_ON" = "1" ]; then
+elif cap_enabled clawgod.lean-settings && [ "$LEAN_ON" = "1" ]; then
   rm -f "$LEAN_OFF_FLAG" "$LEAN_MAX_FLAG"
-elif [ "$LEAN_MAX" = "1" ]; then
+elif cap_enabled clawgod.lean-settings && [ "$LEAN_MAX" = "1" ]; then
   rm -f "$LEAN_OFF_FLAG"; touch "$LEAN_MAX_FLAG"
 fi
 
-if [ ! -f "$LEAN_OFF_FLAG" ]; then
+if cap_enabled clawgod.lean-settings && [ ! -f "$LEAN_OFF_FLAG" ]; then
   CLAUDE_SETTINGS_DIR="$HOME/.claude"
   CLAUDE_SETTINGS="$CLAUDE_SETTINGS_DIR/settings.json"
   mkdir -p "$CLAUDE_SETTINGS_DIR"
@@ -2476,7 +2575,7 @@ if (changed) fs.writeFileSync(settingsPath, JSON.stringify(s, null, 2) + "\n");
   else
     info "Lean settings applied: on (~/.claude/settings.json)"
   fi
-else
+elif cap_enabled clawgod.lean-settings; then
   dim "Lean mode disabled (claude --lean-on to re-enable)"
 fi
 
@@ -2669,21 +2768,32 @@ hash -r 2>/dev/null
 echo ""
 echo -e "  ${BOLD}${GREEN}ClawGod installed!${NC}"
 echo ""
-dim "  claude            — Start patched Claude Code (green logo)"
+if cap_enabled clawgod.green-theme; then
+  dim "  claude            — Start patched Claude Code (green logo)"
+else
+  dim "  claude            — Start patched Claude Code"
+fi
 dim "  claude.orig       — Run original unpatched Claude Code"
 echo ""
-dim "  Updates: 'claude update' is patched to route through this installer."
-dim "  Just run it as usual — pulls latest Anthropic release + re-patches"
-dim "  in one step. Extra options:"
-dim "    claude update --version 2.1.180   (install a specific version)"
-dim "    claude update --no-upgrade        (re-patch without downloading)"
+if cap_enabled clawgod.update-command-redirect; then
+  dim "  Updates: 'claude update' is patched to route through this installer."
+  dim "  Just run it as usual — pulls latest Anthropic release + re-patches"
+  dim "  in one step. Extra options:"
+  dim "    claude update --version 2.1.180   (install a specific version)"
+  dim "    claude update --no-upgrade        (re-patch without downloading)"
+else
+  dim "  Updates: clawgod.update-command-redirect is disabled."
+  dim "  Re-apply patches after editing $PATCHES_FILE:"
+  dim "    curl -fsSL https://github.com/0Chencc/clawgod/releases/latest/download/install.sh | bash -s -- --no-upgrade"
+fi
 dim "  To leave clawgod and use vanilla update:"
 dim "    bash ~/.clawgod/install.sh --uninstall"
 echo ""
 warn "  If 'claude' still runs the old version, restart your terminal or run: hash -r"
 echo ""
-dim "  Config: ~/.clawgod/provider.json"
-dim "  Flags:  ~/.clawgod/features.json"
+if [ -f "$PATCHES_FILE" ]; then dim "  Patches: $PATCHES_FILE"; fi
+if cap_enabled clawgod.provider-config; then dim "  Config:  $CLAWGOD_DIR/provider.json"; fi
+if cap_enabled clawgod.features-config; then dim "  Flags:   $CLAWGOD_DIR/features.json"; fi
 echo ""
 dim "  If 'claude' panics with 'Expected CommonJS module to have a function wrapper',"
 dim "  your Bun lags Anthropic's embedded Bun. Upgrade with one of:"
