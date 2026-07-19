@@ -38,6 +38,7 @@ function launch(args = [], env = {}) {
     stderr: { write() {} }, exit(code) { assert.equal(code, 0); throw exit; } };
   try {
     runInNewContext(wrapper, {
+      __dirname: dir,
       process: proc,
       require(name) {
         if (name === 'os') return { homedir: () => home };

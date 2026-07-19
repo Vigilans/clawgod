@@ -19,6 +19,7 @@ try {
       const env = inherited === undefined ? {} : { DISABLE_AUTOUPDATER: inherited };
       let loaded = false;
       runInNewContext(wrapper, {
+        __dirname: dir,
         process: { argv: ['bun', 'cli.cjs'], env, execPath: '/test/bun', stderr: { write() {} } },
         require(name) {
           if (name === 'os') return { homedir: () => home };

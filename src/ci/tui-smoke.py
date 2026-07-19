@@ -143,6 +143,7 @@ def run_case(args, name, command, shim, expect_error=False):
         "ANTHROPIC_BASE_URL": f"http://127.0.0.1:{server.server_port}",
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "DISABLE_AUTOUPDATER": "1",
         "DISABLE_TELEMETRY": "1", "CLAWGOD_FEATURE_BUN_ANT_SHIM": str(shim).lower(),
+        "CLAWGOD_FEATURE_PROVIDER_CONFIG": "false", "CLAWGOD_FEATURE_UPDATE_NOTIFICATION": "false",
     })
     if args.native:
         env["CLAUDE_CODE_EXECPATH"] = str(args.native)
