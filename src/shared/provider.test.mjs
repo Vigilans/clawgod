@@ -45,6 +45,7 @@ function launch(config = {}, env = {}) {
     },
   });
   runInNewContext(launcher, {
+    __dirname: dir,
     process: proc,
     require(name) {
       if (name === 'os') return { homedir: () => home };

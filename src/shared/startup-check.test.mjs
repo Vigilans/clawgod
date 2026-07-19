@@ -114,6 +114,7 @@ try {
       let loaded = false, network = false;
       const modules = [];
       runInNewContext(wrapper, {
+        __dirname: dir,
         process: { argv: ['bun', cli, flag], env: {}, execPath: '/test/bun', stderr: { write() {} } },
         fetch() { network = true; throw new Error('version must not fetch'); },
         AbortSignal,
@@ -137,6 +138,7 @@ try {
   fs.writeFileSync(config, JSON.stringify({ protocol: 'invalid' }));
   for (const args of [['update', '--version', '2.1.285'], ['-p', '--version']]) {
     assert.throws(() => runInNewContext(wrapper, {
+      __dirname: dir,
       process: { argv: ['bun', cli, ...args], env: {} },
       require(name) {
         if (name === './feature-gates.cjs') return { isEnabled: () => true };
