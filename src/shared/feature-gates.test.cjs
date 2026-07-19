@@ -30,7 +30,7 @@ const disabled = Object.fromEntries([...new Set(Object.values(meta).flat())].map
 assert.ok(Object.values(load(disabled).gates).every(value=>value === false));
 
 const cli = fs.readFileSync(path.join(__dirname, 'cli.cjs'),'utf8');
-for (const platform of ['linux','win32']) {
+for (const platform of ['linux','win32']) for (const thirdParty of [false,true]) {
   const paths = platform === 'win32' ? path.win32 : path.posix;
   const home = platform === 'win32' ? 'C:\\Users\\test' : '/users/test';
   const root = paths.join(home,'.clawgod');
@@ -45,7 +45,7 @@ for (const platform of ['linux','win32']) {
     writeFileSync(){writes++;}, mkdirSync(){writes++;}, renameSync(){writes++;},
     readdirSync(){return [];}, rmSync(){writes++;},
   };
-  const env={};
+  const env=thirdParty ? {ANTHROPIC_BASE_URL:'https://test.invalid'} : {};
   vm.runInNewContext(cli, {
     __dirname:root, process:{platform,env,argv:['bun','cli.cjs'],execPath:'bun',stderr:{write(){}},on(){}},
     require(name){
@@ -53,7 +53,7 @@ for (const platform of ['linux','win32']) {
       if(name==='path')return paths;
       if(name==='os')return {homedir:()=>home};
       if(name==='child_process')return {spawnSync(){throw Error('Unexpected subprocess');}};
-      if(name==='./feature-gates.cjs')return load(disabled);
+      if(name==='./feature-gates.cjs')return load({...disabled,'remove-attribution-header':thirdParty});
       if(name==='./runtime-helpers.cjs')return {};
       if(name==='./bun-ant-shim.cjs')return {};
       if(name.endsWith('cli.original.cjs')){loaded=name;return {};}
@@ -61,7 +61,8 @@ for (const platform of ['linux','win32']) {
     },
   });
   assert.equal(writes,0,platform);
-  assert.equal(env.ANTHROPIC_BASE_URL,undefined);
+  assert.equal(env.ANTHROPIC_BASE_URL,thirdParty?'https://test.invalid':undefined);
+  assert.equal(env.CLAUDE_CODE_ATTRIBUTION_HEADER,thirdParty?'0':undefined);
   assert.equal(env.CLAUDE_INTERNAL_FC_OVERRIDES,undefined);
   assert.ok(loaded.endsWith('cli.original.cjs'));
 }
