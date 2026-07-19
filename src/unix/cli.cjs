@@ -4,7 +4,7 @@ const { join, basename } = require('path');
 const { homedir } = require('os');
 const { spawnSync } = require('child_process');
 
-const clawgodDir = join(homedir(), '.clawgod');
+const clawgodDir = __dirname;
 const patchesFile = join(clawgodDir, 'patches.json');
 const enabledCapabilities = existsSync(patchesFile)
   ? new Set(JSON.parse(readFileSync(patchesFile, 'utf8')).enabled)
