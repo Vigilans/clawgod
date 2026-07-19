@@ -12,7 +12,7 @@ set -e
 #    bash install.sh [--version 2.1.89] [--no-upgrade]
 # ─────────────────────────────────────────────────────────
 
-CLAWGOD_DIR="$HOME/.clawgod"
+CLAWGOD_DIR="${CLAWGOD_DIR:-$HOME/.clawgod}"
 BIN_DIR="$HOME/.local/bin"
 VERSION="${CLAWGOD_VERSION:-latest}"
 NO_UPGRADE="${CLAWGOD_NO_UPGRADE:-}"
@@ -1454,7 +1454,16 @@ const { join, basename } = require('path');
 const { homedir } = require('os');
 const { spawnSync } = require('child_process');
 
-const clawgodDir = join(homedir(), '.clawgod');
+const clawgodDir = __dirname;
+if (process.argv[2] === 'import') {
+  const importer = join(clawgodDir, process.platform === 'win32' ? 'clawgod-import.exe' : 'clawgod-import');
+  if (!existsSync(importer)) {
+    console.error('clawgod: import tool not installed. Reinstall clawgod to get it.');
+    process.exit(127);
+  }
+  const result = spawnSync(importer, process.argv.slice(3), {stdio:'inherit'});
+  process.exit(result.status ?? 1);
+}
 const featureEnabled = require('./feature-gates.cjs').isEnabled;
 
 // Note: there used to be a "drift detection" block here that scanned
@@ -3221,8 +3230,9 @@ fi
 
 LAUNCHER_CONTENT="#!/bin/bash
 # clawgod launcher
-CLAWGOD_CLI=\"$CLAWGOD_DIR/cli.cjs\"
-CLAWGOD_IMPORT=\"$CLAWGOD_DIR/clawgod-import\"
+export CLAWGOD_DIR=$(printf '%q' "$CLAWGOD_DIR")
+CLAWGOD_CLI=\"\$CLAWGOD_DIR/cli.cjs\"
+CLAWGOD_IMPORT=\"\$CLAWGOD_DIR/clawgod-import\"
 BUN_BIN=\"$BUN_BIN\"
 # Route 'import' subcommand to clawgod-import binary
 if [ \"\$1\" = \"import\" ]; then
@@ -3235,7 +3245,7 @@ if [ \"\$1\" = \"import\" ]; then
   fi
 fi
 if [ ! -f \"\$CLAWGOD_CLI\" ]; then
-  echo \"clawgod: installation at $CLAWGOD_DIR is missing (cli.cjs not found)\" >&2
+  echo \"clawgod: installation at \$CLAWGOD_DIR is missing (cli.cjs not found)\" >&2
   echo \"clawgod: reinstall via  curl -fsSL https://github.com/0Chencc/clawgod/releases/latest/download/install.sh | bash\" >&2
   echo \"clawgod: or remove this launcher:  rm \\\"\$0\\\"\" >&2
   exit 127

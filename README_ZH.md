@@ -120,7 +120,7 @@ claude.orig         # 原版未修改版本（自动备份）
 
 ### 功能开关
 
-`~/.clawgod/patches.json`（首次安装自动创建）可持久关闭指定功能，配置在更新和重装后保留。未列出的 key 默认开启。
+安装目录中的 `patches.json`（首次安装自动创建）可持久关闭指定功能，配置在更新和重装后保留。默认目录为 `~/.clawgod`，Unix 和 Windows 均可在安装时通过 `CLAWGOD_DIR` 指定目录。未列出的 key 默认开启。
 
 安装器在安装新 wrapper 时将已有的 `{"enabled":[...]}` capability 白名单转换为 feature 布尔开关。下载前先验证配置，转换时保留内容完整的 `patches.json.legacy-*.bak` 备份。无法识别的旧 capability 会终止迁移并保留原配置；运行时使用新的 feature 对象格式。
 

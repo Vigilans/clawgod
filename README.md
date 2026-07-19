@@ -120,7 +120,7 @@ claude.orig         # Original unpatched version (auto-backed-up)
 
 ### Feature Toggles
 
-`~/.clawgod/patches.json` (auto-created empty) switches features off persistently — your choices survive updates and reinstalls. Absent key = on.
+`patches.json` in the installation directory (`~/.clawgod` by default, or `CLAWGOD_DIR` set when installing) switches features off persistently. It is auto-created empty, and choices survive updates and reinstalls. Absent key = on. Custom directories are supported on Unix and Windows.
 
 The installer converts an existing `{"enabled":[...]}` capability allowlist to feature booleans when installing the new wrapper. It validates before downloading and keeps an exact `patches.json.legacy-*.bak` backup. Unknown legacy capabilities stop migration without changing the configuration. Runtime launches require the feature-object format.
 

@@ -30,7 +30,7 @@ if ($env:CLAWGOD_LEAN_OFF -eq "1") { $LeanOff = [switch]$true }
 if ($env:CLAWGOD_LEAN_ON -eq "1") { $LeanOn = [switch]$true }
 if ($env:CLAWGOD_LEAN_MAX -eq "1") { $LeanMax = [switch]$true }
 
-$ClawDir = Join-Path $env:USERPROFILE ".clawgod"
+$ClawDir = if ($env:CLAWGOD_DIR) { [System.IO.Path]::GetFullPath($env:CLAWGOD_DIR) } else { Join-Path $env:USERPROFILE ".clawgod" }
 $BinDir  = Join-Path $env:USERPROFILE ".local\bin"
 $ClawSelfVersion = "0.0.0-dev"  # injected by release workflow from git tag
 
@@ -609,7 +609,6 @@ Write-OK "Bun loads cli.original.cjs"
 # encoding issues when the profile path contains non-ASCII characters (e.g.
 # Chinese/Korean/Japanese usernames). cmd.exe resolves %USERPROFILE% at
 # runtime so no problematic characters need to be baked into the .cmd file.
-$cliPathInCmd = "%USERPROFILE%\.clawgod\cli.cjs"
 $normalizedUserProfile = $env:USERPROFILE.TrimEnd('\', '/')
 $normalizedBunBin = $BunBin.TrimEnd('\', '/')
 $userProfilePrefix = "$normalizedUserProfile\"
@@ -634,8 +633,20 @@ if (-not (Test-Path $importBin)) {
     }
 }
 
-$importPathInCmd = "%USERPROFILE%\.clawgod\clawgod-import.exe"
-$launcherContent = "@echo off`r`nif `"%~1`"==`"import`" (`r`n  if exist `"$importPathInCmd`" (`r`n    shift`r`n    `"$importPathInCmd`" %1 %2 %3 %4 %5 %6 %7 %8 %9`r`n    exit /b %ERRORLEVEL%`r`n  ) else (`r`n    echo clawgod: import tool not installed. Reinstall clawgod to get it.`r`n    exit /b 127`r`n  )`r`n)`r`nif not exist `"$cliPathInCmd`" (`r`n  echo clawgod: cli.cjs not found. Reinstall: irm https://github.com/0Chencc/clawgod/releases/latest/download/install.ps1 ^| iex`r`n  exit /b 127`r`n)`r`nif not exist `"$bunPathInCmd`" (`r`n  echo clawgod: bun not found at $bunPathInCmd. Install: https://bun.sh/install`r`n  exit /b 127`r`n)`r`nset `"CLAUDE_CODE_EXECPATH=%~dp0claude.orig.exe`"`r`n`"$bunPathInCmd`" `"$cliPathInCmd`" %*"
+$clawPathInCmd = $ClawDir.Replace('%', '%%')
+$launcherContent = @"
+@echo off
+setlocal DisableDelayedExpansion
+for /f "tokens=2 delims=:" %%C in ('chcp') do set "_CLAWGOD_CODEPAGE=%%C"
+chcp 65001 >nul
+set "CLAWGOD_DIR=$clawPathInCmd"
+set "CLAUDE_CODE_EXECPATH=%~dp0claude.orig.exe"
+"$bunPathInCmd" "%CLAWGOD_DIR%\cli.cjs" %*
+set "_CLAWGOD_EXIT=%ERRORLEVEL%"
+chcp %_CLAWGOD_CODEPAGE% >nul
+exit /b %_CLAWGOD_EXIT%
+"@
+$launcherContent = $launcherContent -replace '\r?\n', "`r`n"
 
 # Find and back up original claude
 $claudeCmd = Join-Path $BinDir "claude.cmd"
@@ -709,7 +720,7 @@ if (Test-Path $claudeExe) {
 #  - User can invoke patched explicitly via `clawgod` regardless of which
 #    binary 'claude' resolves to
 foreach ($cmd in @("claude", "clawgod")) {
-    $launcherContent | Set-Content (Join-Path $BinDir "$cmd.cmd") -Encoding Default
+    [System.IO.File]::WriteAllText((Join-Path $BinDir "$cmd.cmd"), $launcherContent, (New-Object System.Text.UTF8Encoding $false))
 }
 Write-OK "Commands 'claude' + 'clawgod' -> patched"
 

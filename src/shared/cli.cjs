@@ -4,7 +4,16 @@ const { join, basename } = require('path');
 const { homedir } = require('os');
 const { spawnSync } = require('child_process');
 
-const clawgodDir = join(homedir(), '.clawgod');
+const clawgodDir = __dirname;
+if (process.argv[2] === 'import') {
+  const importer = join(clawgodDir, process.platform === 'win32' ? 'clawgod-import.exe' : 'clawgod-import');
+  if (!existsSync(importer)) {
+    console.error('clawgod: import tool not installed. Reinstall clawgod to get it.');
+    process.exit(127);
+  }
+  const result = spawnSync(importer, process.argv.slice(3), {stdio:'inherit'});
+  process.exit(result.status ?? 1);
+}
 const featureEnabled = require('./feature-gates.cjs').isEnabled;
 
 // Note: there used to be a "drift detection" block here that scanned
