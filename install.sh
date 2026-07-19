@@ -1307,7 +1307,8 @@ if (capabilityEnabled('clawgod.provider-config')) {
 // so the cached prefix changes every request and cache hit rate drops to
 // zero. Auto-disable the header whenever baseURL points away from Anthropic.
 // Users can force re-enable with CLAUDE_CODE_ATTRIBUTION_HEADER=1 if needed.
-if (capabilityEnabled('system-prompt.remove-attribution-header') && config.baseURL && !/anthropic\.com/i.test(config.baseURL)) {
+const configuredBaseURL = process.env.ANTHROPIC_BASE_URL ?? config.baseURL;
+if (capabilityEnabled('system-prompt.remove-attribution-header') && configuredBaseURL && !/anthropic\.com/i.test(configuredBaseURL)) {
   process.env.CLAUDE_CODE_ATTRIBUTION_HEADER ??= '0';
   // Third-party proxies (headroom, etc.) often require remote control.
   // Lean mode sets disableRemoteControl:true in settings.json — undo it
