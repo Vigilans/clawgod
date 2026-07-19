@@ -53,8 +53,11 @@ echo ""
 
 if [ "$UNINSTALL" = "1" ]; then
   CLAUDE_BIN=$(command -v claude 2>/dev/null || true)
+  LAST_DIR=""
   for DIR in "${CLAUDE_BIN:+$(dirname "$CLAUDE_BIN")}" "$BIN_DIR"; do
     [ -z "$DIR" ] && continue
+    [ "$DIR" = "$LAST_DIR" ] && continue
+    LAST_DIR=$DIR
     if [ -e "$DIR/claude.orig" ]; then
       # Has backup — restore it
       mv "$DIR/claude.orig" "$DIR/claude"
