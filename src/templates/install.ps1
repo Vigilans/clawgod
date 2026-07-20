@@ -397,7 +397,7 @@ if (-not (Test-Path $dstCli)) {
     exit 1
 }
 
-# Note: keep extractorPath around -- repatch.mjs uses it on version drift
+# Keep extractorPath for use by repatch.mjs.
 
 # --- Post-process cli.js for Bun runtime -------------------------------
 
@@ -412,11 +412,10 @@ if (-not (Test-Path (Join-Path $ClawDir "cli.original.cjs"))) {
     exit 1
 }
 
-# Stamp source version so wrapper can detect drift on next launch
+# Record the extracted source label.
 Set-Content -Path (Join-Path $ClawDir ".source-version") -Value $NativeBinLabel -Encoding ASCII
 
-# If we pulled the binary from npm into a tmpdir, clean up -- extraction
-# is done; drift detection only consults %USERPROFILE%\.local\share\claude\versions\.
+# If we pulled the binary from npm into a tmpdir, clean it up now.
 if ($NativeBinTmpDir -and (Test-Path $NativeBinTmpDir)) {
     Remove-Item -Recurse -Force $NativeBinTmpDir -ErrorAction SilentlyContinue
 }
@@ -425,7 +424,7 @@ Write-OK "cli.original.cjs ready ($NativeBinLabel)"
 
 }  # end -NoUpgrade skip
 
-# --- Write re-patch helper (used by wrapper on version drift) ---------
+# --- Write re-patch helper --------------------------------------------
 
 @'
 {{CLAWGOD:repatch.mjs}}

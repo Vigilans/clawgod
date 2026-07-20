@@ -16,20 +16,6 @@ if (process.argv[2] === 'import') {
 }
 const featureEnabled = require('./feature-gates.cjs').isEnabled;
 
-// Note: there used to be a "drift detection" block here that scanned
-// ~/.local/share/claude/versions/ for a newer binary and silently re-patched.
-// Removed because:
-//   1. Windows users don't have a `versions/` directory at all (Anthropic's
-//      Windows install doesn't follow that convention).
-//   2. We patch out `claude update` (it would otherwise overwrite the bun
-//      runtime under our launcher), so `versions/` no longer auto-grows
-//      on a healthy clawgod install.
-// In practice the block was reading a directory that never changes, but
-// could *retract* a fresher version that install.sh just pulled from npm
-// registry — putting users into a re-patch loop. Upgrades now go through
-// the patched `claude update` → install.sh redirect, which always pulls
-// the latest from npm.
-
 // One-time migration: earlier wrapper versions set CLAUDE_CONFIG_DIR=~/.clawgod,
 // which made Claude Code read/write ~/.clawgod/.claude.json instead of the
 // native ~/.claude.json (the file holding MCP config, project history, session

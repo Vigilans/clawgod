@@ -1160,7 +1160,7 @@ if (-not (Test-Path $dstCli)) {
     exit 1
 }
 
-# Note: keep extractorPath around -- repatch.mjs uses it on version drift
+# Keep extractorPath for use by repatch.mjs.
 
 # --- Post-process cli.js for Bun runtime -------------------------------
 
@@ -1266,11 +1266,10 @@ if (-not (Test-Path (Join-Path $ClawDir "cli.original.cjs"))) {
     exit 1
 }
 
-# Stamp source version so wrapper can detect drift on next launch
+# Record the extracted source label.
 Set-Content -Path (Join-Path $ClawDir ".source-version") -Value $NativeBinLabel -Encoding ASCII
 
-# If we pulled the binary from npm into a tmpdir, clean up -- extraction
-# is done; drift detection only consults %USERPROFILE%\.local\share\claude\versions\.
+# If we pulled the binary from npm into a tmpdir, clean it up now.
 if ($NativeBinTmpDir -and (Test-Path $NativeBinTmpDir)) {
     Remove-Item -Recurse -Force $NativeBinTmpDir -ErrorAction SilentlyContinue
 }
@@ -1279,13 +1278,11 @@ Write-OK "cli.original.cjs ready ($NativeBinLabel)"
 
 }  # end -NoUpgrade skip
 
-# --- Write re-patch helper (used by wrapper on version drift) ---------
+# --- Write re-patch helper --------------------------------------------
 
 @'
 #!/usr/bin/env bun
-// Re-extract + post-process + patch the user's currently-installed
-// native Claude binary. Invoked by cli.cjs when it detects that
-// .source-version no longer matches the latest binary in versions/.
+// Re-extract + post-process + patch a supplied native Claude binary.
 import { spawnSync } from 'child_process';
 import { writeFileSync, existsSync, mkdirSync, rmSync } from 'fs';
 import { dirname, join, basename } from 'path';
@@ -1606,20 +1603,6 @@ if (process.argv[2] === 'import') {
   process.exit(result.status ?? 1);
 }
 const featureEnabled = require('./feature-gates.cjs').isEnabled;
-
-// Note: there used to be a "drift detection" block here that scanned
-// ~/.local/share/claude/versions/ for a newer binary and silently re-patched.
-// Removed because:
-//   1. Windows users don't have a `versions/` directory at all (Anthropic's
-//      Windows install doesn't follow that convention).
-//   2. We patch out `claude update` (it would otherwise overwrite the bun
-//      runtime under our launcher), so `versions/` no longer auto-grows
-//      on a healthy clawgod install.
-// In practice the block was reading a directory that never changes, but
-// could *retract* a fresher version that install.sh just pulled from npm
-// registry \u2014 putting users into a re-patch loop. Upgrades now go through
-// the patched `claude update` \u2192 install.sh redirect, which always pulls
-// the latest from npm.
 
 // One-time migration: earlier wrapper versions set CLAUDE_CONFIG_DIR=~/.clawgod,
 // which made Claude Code read/write ~/.clawgod/.claude.json instead of the
@@ -2553,8 +2536,8 @@ const patches = [
     // (preserving Apr-19-build mtime). That **silently downgrades** clawgod's
     // required Bun and crashes cli.original.cjs the next launch with
     // "Expected CommonJS module to have a function wrapper". On Windows the
-    // same fallback writes the new binary somewhere our drift detection
-    // doesn't scan, so the user sees "Successfully updated" but never gets
+    // same fallback writes the new binary without replacing ClawGod's patched
+    // source, so the user sees "Successfully updated" but never gets
     // the new version.
     //
     // Redirect to clawgod's own self-update so the upgrade goes through
