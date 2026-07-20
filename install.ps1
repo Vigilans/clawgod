@@ -984,9 +984,7 @@ Write-OK "cli.original.cjs ready ($NativeBinLabel)"
 
 @'
 #!/usr/bin/env bun
-// Re-extract + post-process + patch the user's currently-installed
-// native Claude binary. Invoked by cli.cjs when it detects that
-// .source-version no longer matches the latest binary in versions/.
+// Re-extract + post-process + patch a supplied native Claude binary.
 import { spawnSync } from 'child_process';
 import { writeFileSync, existsSync, mkdirSync, rmSync } from 'fs';
 import { dirname, join, basename } from 'path';
@@ -2029,8 +2027,8 @@ const patches = [
     // (preserving Apr-19-build mtime). That **silently downgrades** clawgod's
     // required Bun and crashes cli.original.cjs the next launch with
     // "Expected CommonJS module to have a function wrapper". On Windows the
-    // same fallback writes the new binary somewhere our drift detection
-    // doesn't scan, so the user sees "Successfully updated" but never gets
+    // same fallback writes the new binary without replacing ClawGod's patched
+    // source, so the user sees "Successfully updated" but never gets
     // the new version.
     //
     // Redirect to clawgod's own self-update so the upgrade goes through

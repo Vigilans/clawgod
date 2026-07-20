@@ -732,9 +732,7 @@ main();
 EXTRACTOR_EOF
 
 # ─── Extract cli.js + native modules from Bun binary ──────────
-# Note: extract-natives.mjs and post-process.mjs are kept around (NOT deleted)
-# so the wrapper's drift detector can re-run them when the user upgrades
-# their native Claude binary.
+# Keep extract-natives.mjs and post-process.mjs for use by repatch.mjs.
 
 # Single extractor pass: writes cli.original.js + (v2.1.245+) full chunk graph
 # to $CLAWGOD_DIR/bunfs/ and vendor/<name>/<arch>-<os>/<name>.node, plus a
@@ -856,11 +854,10 @@ POSTPROC_EOF
 node "$CLAWGOD_DIR/post-process.mjs" 2>&1 | while IFS= read -r line; do echo "  $line"; done
 [ -f "$CLAWGOD_DIR/cli.original.cjs" ] || { err "Post-process failed"; exit 1; }
 
-# Stamp the source version so the wrapper can detect drift on next launch
+# Record the extracted source label.
 echo "$NATIVE_BIN_LABEL" > "$CLAWGOD_DIR/.source-version"
 
-# If we pulled the binary from npm into a tmpdir, clean it up now —
-# extraction is done, drift detection only consults ~/.local/share/claude/versions/.
+# If we pulled the binary from npm into a tmpdir, clean it up now.
 if [ -n "$NATIVE_BIN_TMPDIR" ]; then
   rm -rf "$NATIVE_BIN_TMPDIR"
 fi
@@ -869,13 +866,11 @@ info "cli.original.cjs ready ($NATIVE_BIN_LABEL)"
 
 fi  # end --no-upgrade skip
 
-# ─── Write re-patch helper (used by wrapper on version drift) ─────────
+# ─── Write re-patch helper ──────────────────────────────
 
 cat > "$CLAWGOD_DIR/repatch.mjs" << 'REPATCH_EOF'
 #!/usr/bin/env bun
-// Re-extract + post-process + patch the user's currently-installed
-// native Claude binary. Invoked by cli.cjs when it detects that
-// .source-version no longer matches the latest binary in versions/.
+// Re-extract + post-process + patch a supplied native Claude binary.
 import { spawnSync } from 'child_process';
 import { writeFileSync, existsSync, mkdirSync, rmSync } from 'fs';
 import { dirname, join, basename } from 'path';
@@ -1955,8 +1950,8 @@ const patches = [
     // (preserving Apr-19-build mtime). That **silently downgrades** clawgod's
     // required Bun and crashes cli.original.cjs the next launch with
     // "Expected CommonJS module to have a function wrapper". On Windows the
-    // same fallback writes the new binary somewhere our drift detection
-    // doesn't scan, so the user sees "Successfully updated" but never gets
+    // same fallback writes the new binary without replacing ClawGod's patched
+    // source, so the user sees "Successfully updated" but never gets
     // the new version.
     //
     // Redirect to clawgod's own self-update so the upgrade goes through
