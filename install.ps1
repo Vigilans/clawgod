@@ -1226,7 +1226,7 @@ if (($LASTEXITCODE -ne 0) -or -not (Test-Path $dstCli)) {
     exit 1
 }
 
-# Note: keep extractorPath around -- repatch.mjs uses it on version drift
+# Keep extractorPath for use by repatch.mjs.
 
 # --- Post-process cli.js for Bun runtime -------------------------------
 
@@ -1355,7 +1355,7 @@ if (($LASTEXITCODE -ne 0) -or -not (Test-Path (Join-Path $ClawDir "cli.original.
     exit 1
 }
 
-# Stamp source version so wrapper can detect drift on next launch
+# Record the extracted source label.
 Set-Content -Path (Join-Path $ClawDir ".source-version") -Value $NativeBinLabel -Encoding ASCII
 
 # Keep the binary we just extracted from. cli.cjs points process.execPath at
@@ -1367,8 +1367,7 @@ if ($NativeBin -and (Test-Path $NativeBin)) {
     Move-Item -Force $NativeBin (Join-Path $ClawDir "claude.staged.exe")
 }
 
-# If we pulled the binary from npm into a tmpdir, clean up -- extraction
-# is done; drift detection only consults %USERPROFILE%\.local\share\claude\versions\.
+# If we pulled the binary from npm into a tmpdir, clean it up now.
 if ($NativeBinTmpDir -and (Test-Path $NativeBinTmpDir)) {
     Remove-Item -Recurse -Force $NativeBinTmpDir -ErrorAction SilentlyContinue
 }
@@ -1382,13 +1381,11 @@ if ($NoUpgrade) {
     Remove-Item -LiteralPath (Join-Path $ClawDir "claude.staged.exe") -Force -ErrorAction SilentlyContinue
 }
 
-# --- Write re-patch helper (used by wrapper on version drift) ---------
+# --- Write re-patch helper --------------------------------------------
 
 @'
 #!/usr/bin/env bun
-// Re-extract + post-process + patch the user's currently-installed
-// native Claude binary. Invoked by cli.cjs when it detects that
-// .source-version no longer matches the latest binary in versions/.
+// Re-extract + post-process + patch a supplied native Claude binary.
 import { spawnSync } from 'child_process';
 import { writeFileSync, existsSync, mkdirSync, rmSync } from 'fs';
 import { dirname, join, basename } from 'path';
@@ -1795,14 +1792,6 @@ const featureEnabled = require('./feature-gates.cjs').isEnabled;
 // servers or background update requests that keep the process alive (#203).
 // Match only a standalone flag, never a prompt/subcommand containing it.
 const versionOnly = process.argv.length === 3 && ['--version', '-v'].includes(process.argv[2]);
-
-// Note: there used to be a "drift detection" block here that scanned
-// ~/.local/share/claude/versions/ for a newer binary and silently re-patched.
-// Retained native versions (including on Windows) may be older than the
-// version our installer pulled from npm. Scanning them could roll back a
-// fresh install and cause a re-patch loop. Upgrades instead go through the
-// patched `claude update` redirect; native background updates are disabled
-// below so they cannot restore an official launcher over ours.
 
 // One-time migration: earlier wrapper versions set CLAUDE_CONFIG_DIR=~/.clawgod,
 // which made Claude Code read/write ~/.clawgod/.claude.json instead of the
@@ -9848,8 +9837,8 @@ const patches = [
     // (preserving Apr-19-build mtime). That **silently downgrades** clawgod's
     // required Bun and crashes cli.original.cjs the next launch with
     // "Expected CommonJS module to have a function wrapper". On Windows the
-    // same fallback writes the new binary somewhere our drift detection
-    // doesn't scan, so the user sees "Successfully updated" but never gets
+    // same fallback writes the new binary without replacing ClawGod's patched
+    // source, so the user sees "Successfully updated" but never gets
     // the new version.
     //
     // Redirect to clawgod's own self-update so the upgrade goes through

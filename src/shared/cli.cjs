@@ -20,14 +20,6 @@ const featureEnabled = require('./feature-gates.cjs').isEnabled;
 // Match only a standalone flag, never a prompt/subcommand containing it.
 const versionOnly = process.argv.length === 3 && ['--version', '-v'].includes(process.argv[2]);
 
-// Note: there used to be a "drift detection" block here that scanned
-// ~/.local/share/claude/versions/ for a newer binary and silently re-patched.
-// Retained native versions (including on Windows) may be older than the
-// version our installer pulled from npm. Scanning them could roll back a
-// fresh install and cause a re-patch loop. Upgrades instead go through the
-// patched `claude update` redirect; native background updates are disabled
-// below so they cannot restore an official launcher over ours.
-
 // One-time migration: earlier wrapper versions set CLAUDE_CONFIG_DIR=~/.clawgod,
 // which made Claude Code read/write ~/.clawgod/.claude.json instead of the
 // native ~/.claude.json (the file holding MCP config, project history, session

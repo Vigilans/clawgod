@@ -349,9 +349,7 @@ cat > "$CLAWGOD_DIR/extract-natives.mjs" << 'EXTRACTOR_EOF'
 EXTRACTOR_EOF
 
 # ─── Extract cli.js + native modules from Bun binary ──────────
-# Note: extract-natives.mjs and post-process.mjs are kept around (NOT deleted)
-# so the wrapper's drift detector can re-run them when the user upgrades
-# their native Claude binary.
+# Keep extract-natives.mjs and post-process.mjs for use by repatch.mjs.
 
 # Single extractor pass: writes cli.original.js + (v2.1.245+) full chunk graph
 # to $CLAWGOD_DIR/bunfs/ and vendor/<name>/<arch>-<os>/<name>.node, plus a
@@ -384,7 +382,7 @@ node "$CLAWGOD_DIR/post-process.mjs" 2>&1 | while IFS= read -r line; do echo "  
 if [ "${PIPESTATUS[0]}" -ne 0 ]; then err "Post-process failed"; exit 1; fi
 [ -f "$CLAWGOD_DIR/cli.original.cjs" ] || { err "Post-process failed"; exit 1; }
 
-# Stamp the source version so the wrapper can detect drift on next launch
+# Record the extracted source label.
 echo "$NATIVE_BIN_LABEL" > "$CLAWGOD_DIR/.source-version"
 
 # Keep the binary we just extracted from. cli.cjs points process.execPath at
@@ -395,8 +393,7 @@ if [ -f "$NATIVE_BIN" ]; then
   mv -f "$NATIVE_BIN" "$CLAWGOD_DIR/claude.staged"
 fi
 
-# If we pulled the binary from npm into a tmpdir, clean it up now —
-# extraction is done, drift detection only consults ~/.local/share/claude/versions/.
+# If we pulled the binary from npm into a tmpdir, clean it up now.
 if [ -n "$NATIVE_BIN_TMPDIR" ]; then
   rm -rf "$NATIVE_BIN_TMPDIR"
 fi
@@ -409,7 +406,7 @@ fi  # end --no-upgrade skip
 # Re-patching the installed source must not install that different version.
 if [ "$NO_UPGRADE" = "1" ]; then rm -f "$CLAWGOD_DIR/claude.staged"; fi
 
-# ─── Write re-patch helper (used by wrapper on version drift) ─────────
+# ─── Write re-patch helper ──────────────────────────────
 
 cat > "$CLAWGOD_DIR/repatch.mjs" << 'REPATCH_EOF'
 {{CLAWGOD:repatch.mjs}}
