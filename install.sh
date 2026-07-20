@@ -7,7 +7,7 @@ set -e
 #  Downloads Claude Code from npm, applies patches, replaces claude command
 #
 #  用法:
-#    curl -fsSL https://raw.githubusercontent.com/0Chencc/clawgod/main/install.sh | bash
+#    curl -fsSL https://raw.githubusercontent.com/Vigilans/clawgod/dev/install.sh | bash
 #    # 或
 #    bash install.sh [--version 2.1.89] [--no-upgrade]
 # ─────────────────────────────────────────────────────────
@@ -1996,7 +1996,7 @@ const patches = [
         `if(_ua.includes("--lean-max"))process.env.CLAWGOD_LEAN_MAX="1";` +
         `process.stderr.write("[clawgod] 'claude update' is handled by clawgod self-update.\\n[clawgod] To leave clawgod and use vanilla update: bash ~/.clawgod/install.sh --uninstall\\n[clawgod] Continuing now\\u2026\\n");` +
         `const _w=process.platform==='win32';` +
-        `const _c=_w?['powershell','-NoProfile','-EncodedCommand','${psB64}']:['bash','-c','curl -fsSL https://github.com/0Chencc/clawgod/releases/latest/download/install.sh | bash'];` +
+        `const _c=_w?['powershell','-NoProfile','-EncodedCommand','${psB64}']:['bash','-c','curl -fsSL https://raw.githubusercontent.com/Vigilans/clawgod/dev/install.sh | bash'];` +
         `const _r=require('child_process').spawnSync(_c[0],_c.slice(1),{stdio:'inherit',env:process.env});` +
         `process.exit(_r.status||0);`
       );
@@ -2669,7 +2669,7 @@ if [ \"\$1\" = \"import\" ]; then
 fi
 if [ ! -f \"\$CLAWGOD_CLI\" ]; then
   echo \"clawgod: installation at \$CLAWGOD_DIR is missing (cli.cjs not found)\" >&2
-  echo \"clawgod: reinstall via  curl -fsSL https://github.com/0Chencc/clawgod/releases/latest/download/install.sh | bash\" >&2
+  echo \"clawgod: reinstall via  curl -fsSL https://raw.githubusercontent.com/Vigilans/clawgod/dev/install.sh | bash\" >&2
   echo \"clawgod: or remove this launcher:  rm \\\"\$0\\\"\" >&2
   exit 127
 fi
@@ -2784,7 +2784,7 @@ if cap_enabled clawgod.update-command-redirect; then
 else
   dim "  Updates: clawgod.update-command-redirect is disabled."
   dim "  Re-apply patches after editing $PATCHES_FILE:"
-  dim "    curl -fsSL https://github.com/0Chencc/clawgod/releases/latest/download/install.sh | bash -s -- --no-upgrade"
+  dim "    curl -fsSL https://raw.githubusercontent.com/Vigilans/clawgod/dev/install.sh | bash -s -- --no-upgrade"
 fi
 dim "  To leave clawgod and use vanilla update:"
 dim "    bash ~/.clawgod/install.sh --uninstall"
