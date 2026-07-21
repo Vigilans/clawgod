@@ -43,7 +43,7 @@ const FEATURES = {
   'lean-settings': { desc: 'lean-settings', patchIds: [], runtimeIds: ["lean-settings"] },
   'update-notification': { desc: 'update-notification', patchIds: [], runtimeIds: ["update-notification"] },
   'remove-attribution-header': { desc: 'remove-attribution-header', patchIds: [], runtimeIds: ["remove-attribution-header"] },
-  'custom-model-aliases': { desc: 'custom-model-aliases', patchIds: ["custom-alias-env","custom-alias-schema","custom-alias-picker","custom-alias-resolve"] },
+  'custom-model-aliases': { desc: 'custom-model-aliases', patchIds: ["custom-alias-env","custom-alias-schema","custom-alias-picker","custom-alias-command","custom-alias-resolve"] },
   'hook-update-agent-model': { desc: 'hook-update-agent-model', patchIds: ["hook-input-validation","hook-input-origin","hook-permission-validation"] },
   'send-message-resume-model': { desc: 'send-message-resume-model', patchIds: ["agent-model-metadata","agent-model-restore","agent-model-query"] },
   'agent-teams':    { desc: 'Agent Teams always enabled',
@@ -151,16 +151,19 @@ const patches = [
     unique: true,
   },
   {
-    // Add the same normalized aliases to the /model picker. Use the optional
-    // ANTHROPIC_DEFAULT_<ALIAS>_NAME and _DESCRIPTION values for display metadata.
+    // Add the same normalized aliases to the /model picker. Display the resolved
+    // model ID while keeping the alias as the option value, and use the optional
+    // ANTHROPIC_DEFAULT_<ALIAS>_NAME and _DESCRIPTION for its description.
+    // Newer versions read the native custom option through the parsed env object;
+    // older versions read process.env directly.
     id: 'custom-alias-picker',
     toggleable: true,
     name: 'Add custom aliases to model picker',
     pattern: new RegExp(
       'if\\(([\\w$]+)&&!([\\w$]+)\\.some\\(\\(([\\w$]+)\\)=>\\3\\.value===\\1\\)\\)' +
       '\\2\\.push\\(\\{value:\\1,' +
-      'label:process\\.env\\.ANTHROPIC_CUSTOM_MODEL_OPTION_NAME\\?\\?\\1,' +
-      'description:process\\.env\\.ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION\\?\\?' +
+      'label:(?:process\\.env|[\\w$]+)\\.ANTHROPIC_CUSTOM_MODEL_OPTION_NAME\\?\\?\\1,' +
+      'description:(?:process\\.env|[\\w$]+)\\.ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION\\?\\?' +
       '`Custom model \\(\\$\\{\\1\\}\\)`\\}\\);',
       'g'
     ),
@@ -180,11 +183,25 @@ const patches = [
         `_cgAlias.toUpperCase().replace(/-/g,"_"),` +
         `_cgDefaultName=_cgAlias.charAt(0).toUpperCase()+_cgAlias.slice(1),` +
         `_cgAliasName=process.env[_cgAliasKey+"_NAME"]??_cgDefaultName;` +
-        `${options}.push({value:_cgAlias,label:_cgAliasName,` +
+        `${options}.push({value:_cgAlias,` +
+        `label:process.env[_cgAliasKey+"_MODEL"],` +
         `description:process.env[_cgAliasKey+"_DESCRIPTION"]??` +
         `\`Custom \${_cgAliasName} model\`})}`;
       return m + `if(${gate('custom-alias-picker')}){` + aliasOptions + '}';
     },
+    unique: true,
+  },
+  {
+    // Direct `/model <alias>` validates unknown names against the provider before
+    // storing them. Configured aliases should follow the built-in alias path instead.
+    id: 'custom-alias-command',
+    toggleable: true,
+    name: 'Accept custom aliases in /model command',
+    pattern: /if\(!([\w$]+)\|\|([\w$]+)\(\1\)\)return\{ok:!0,model:\1\};try\{/g,
+    replacer: (m, model, builtInCheck) =>
+      `if(!${model}||${builtInCheck}(${model})||${gate('custom-alias-command')}&&` +
+      `process.env["ANTHROPIC_DEFAULT_"+${model}.toUpperCase().trim()` +
+      `.replace(/-/g,"_")+"_MODEL"])return{ok:!0,model:${model}};try{`,
     unique: true,
   },
   {
@@ -326,39 +343,45 @@ const patches = [
     sentinel: 'The permission handler returned updatedInput for ',
   },
   {
-    // SendMessage reconstructs a stopped or evicted ordinary Agent, but Claude
-    // Code currently drops its spawn-time model override and falls back to the
-    // parent model:
+    // Resuming a stopped Agent with SendMessage could change its model because the
+    // model used at spawn time was not preserved through reconstruction.
     // https://github.com/anthropics/claude-code/issues/67794
     //
-    // Preserve mq()'s already-resolved model in the Agent sidecar so the resume
-    // paths below can reuse the exact model selected for the initial query.
+    // ≤2.1.210: Preserve the resolved spawn-time model here; the two patches below
+    // restore it and pass it into the resumed query.
+    //
+    // ≥2.1.211: Claude Code fixes resume when the Agent call specified a model, but
+    // still does not save a model inherited from frontmatter, global configuration,
+    // the parent, or defaults. Preserve the resolved model so those Agents also resume
+    // with the same model even if their configuration changes after they were spawned.
     id: 'agent-model-metadata',
     toggleable: true,
     name: 'Persist resolved Agent model in metadata',
     pattern: new RegExp(
-      'async function\\*[\\w$]+\\(\\{agentDefinition:[\\w$]+,' +
+      'async function\\*[\\w$]+\\(\\{agentDefinition:([\\w$]+),' +
       '[\\s\\S]{0,400}?toolUseContext:([\\w$]+),' +
       '[\\s\\S]{0,400}?model:([\\w$]+),' +
       '[\\s\\S]{0,1200}?\\}\\)\\{' +
-      'let ([\\w$]+)=[\\w$]+\\(\\1\\),([\\w$]+)=\\3\\.mode,' +
+      'let ([\\w$]+)=[\\w$]+\\(\\2\\),([\\w$]+)=\\4\\.mode,' +
       '[\\s\\S]{0,300}?([\\w$]+)=[\\w$]+\\(' +
-      '[\\s\\S]{0,300}?,\\2,\\4,' +
-      '[\\s\\S]{0,10000}?\\.\\.\\.([\\w$]+)\\.agentId&&' +
-      '\\{parentAgentId:\\6\\.agentId\\},',
+      '[\\s\\S]{0,300}?,\\3,\\5,' +
+      '[\\s\\S]{0,10000}?\\{agentType:\\1\\.agentType,(?!model:)',
       'g'
     ),
-    replacer: (m, toolContext, model, permissionContext, mode, resolvedModel, context) =>
+    replacer: (m, agentDefinition, toolContext, model, permissionContext, mode, resolvedModel) =>
       m.replace(
-        `...${context}.agentId&&{parentAgentId:${context}.agentId},`,
-        `...${context}.agentId&&{parentAgentId:${context}.agentId},...(${gate('agent-model-metadata')}?{model:${resolvedModel}}:{}),`
+        `{agentType:${agentDefinition}.agentType,`,
+        `{agentType:${agentDefinition}.agentType,...(${gate('agent-model-metadata')}?{model:${resolvedModel}}:{}),`
       ),
     unique: true,
   },
   {
-    // On resume, SendMessage first resolves the reconstructed Agent's model for
-    // its task metadata. Supply the model saved above as the existing resolver's
-    // override for ordinary Agents; forks retain their native parent-model path.
+    // ≤2.1.210: SendMessage ignores the model saved at spawn when it chooses the
+    // resumed Agent's model. Pass the saved model to the existing resolver.
+    //
+    // ≥2.1.211: Claude Code already passes the sidecar model to this resolver.
+    // The old resume-query shape below is absent, so the existing sentinel check
+    // reports native support instead of an unverifiable missing patch.
     id: 'agent-model-restore',
     toggleable: true,
     name: 'Restore saved Agent model on resume',
@@ -367,22 +390,25 @@ const patches = [
       '[\\w$]+\\.agentType,([\\w$]+)=[\\w$]+\\?\\?\\(' +
       '[\\w$]+\\?[\\w$]+:[\\w$]+\\),' +
       '[\\w$]+=\\1\\?\\.description\\?\\?"\\(resumed\\)"' +
-      '[\\s\\S]{0,1200}?let ([\\w$]+)=[\\w$]+\\([\\w$]+\\),' +
-      '[\\w$]+=[\\w$]+\\([\\w$]+\\(\\2,\\3\\),' +
-      '\\3,void 0,([\\w$]+)\\);',
+      '[\\s\\S]{0,1600}?=[\\w$]+\\([\\w$]+\\(\\2,' +
+      '([\\w$]+(?:\\.options\\.mainLoopModel)?)\\),\\3,' +
+      'void 0,([\\w$]+)\\)',
       'g'
     ),
     replacer: (m, metadata, definition, parentModel, permissionMode) =>
       m.replace(
-        `${parentModel},void 0,${permissionMode});`,
-        `${parentModel},${gate('agent-model-restore')}?(${metadata}?.model):void 0,${permissionMode});`
+        `${parentModel},void 0,${permissionMode})`,
+        `${parentModel},${gate('agent-model-restore')}?(${metadata}?.isObserver?void 0:${metadata}?.model):void 0,${permissionMode})`
       ),
     unique: true,
+    sentinel: 'spawnedBySkill:void 0,model:void 0,override:',
   },
   {
-    // That resume-side resolution does not flow into mq(), which independently
-    // resolves its model argument for the resumed query. Pass the same saved
-    // model into mq() for ordinary Agents; forks continue to receive model:void 0.
+    // ≤2.1.210: SendMessage chooses the resumed Agent's task model but does not pass
+    // it into the resumed query. Pass the saved model into that query as well.
+    //
+    // ≥2.1.211: Claude Code already passes the sidecar model into the resumed query.
+    // The same sentinel check reports that native support.
     id: 'agent-model-query',
     toggleable: true,
     name: 'Pass saved model to resumed Agent query',
@@ -395,8 +421,12 @@ const patches = [
       'g'
     ),
     replacer: (m, metadata, isFork) =>
-      m.replace('model:void 0,', `model:${gate('agent-model-query')}?(${isFork}?void 0:${metadata}?.model):void 0,`),
+      m.replace(
+        'model:void 0,',
+        `model:${gate('agent-model-query')}?(${metadata}?.isObserver?void 0:${metadata}?.model):void 0,`
+      ),
     unique: true,
+    sentinel: 'spawnedBySkill:void 0,model:void 0,override:',
   },
   {
     id: 'user-type-ant',
