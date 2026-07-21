@@ -1610,12 +1610,7 @@ const patches = [
       'if\\(!\\2\\.success&&\\4\\.length>0\\)\\{' +
       'let ([\\w$]+)=new ([\\w$]+)\\.ZodError\\(\\4\\),' +
       '([\\w$]+)=`PreToolUse hook for \\$\\{\\3\\.name\\} returned updatedInput ' +
-      'that failed schema validation: \\$\\{([\\w$]+)\\(\\3\\.name,\\6\\)\\}`;' +
-      '([\\w$]+)\\(\\8,\\{level:"warn"\\}\\),([\\w$]+)=!0,' +
-      'yield\\{type:"hookPermissionResult",hookPermissionResult:\\{' +
-      'behavior:"deny",message:\\8,decisionReason:\\{type:"hook",' +
-      'hookName:`PreToolUse:\\$\\{\\3\\.name\\}`,hookSource:\\1\\.hookSource,' +
-      'reason:\\8\\}\\}\\};continue\\}\\}',
+      'that failed schema validation: ',
       'g'
     ),
     replacer: (m, result, parsed, tool) =>
