@@ -35,7 +35,7 @@ for (const enabled of [false, true]) {
 
 console.log('[model-patches.test] custom alias gates ok');
 
-const metadata = apply('agent-model-metadata', 'async function*spawn({agentDefinition:def,toolUseContext:ctx,model:chosen,}){let perm=permissions(ctx),mode=perm.mode,resolved=resolve(def,chosen,mode,void 0);yield{...ctx.agentId&&{parentAgentId:ctx.agentId},agentType:def.agentType,}}');
+const metadata = apply('agent-model-metadata', 'async function*spawn({agentDefinition:def,toolUseContext:ctx,model:chosen,}){let perm=permissions(ctx),mode=perm.mode,resolved=resolve(def,chosen,mode,void 0);yield{agentType:def.agentType,...ctx.agentId&&{parentAgentId:ctx.agentId},}}');
 for (const enabled of [false, true]) {
   const result = await runInNewContext(metadata + ';spawn({agentDefinition:{agentType:"test"},toolUseContext:{},model:"chosen"}).next()', {
     __clawgodPatches: { 'agent-model-metadata': enabled },
