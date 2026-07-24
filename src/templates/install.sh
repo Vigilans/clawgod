@@ -73,7 +73,7 @@ if [ "$UNINSTALL" = "1" ]; then
       info "Removed ClawGod alias ($DIR/clawgod)"
     fi
   done
-  rm -rf "$CLAWGOD_DIR/node_modules" "$CLAWGOD_DIR/vendor" "$CLAWGOD_DIR/bun-runtime" "$CLAWGOD_DIR/cli.original.js" "$CLAWGOD_DIR/cli.original.js.bak" "$CLAWGOD_DIR/cli.original.cjs" "$CLAWGOD_DIR/cli.original.cjs.bak" "$CLAWGOD_DIR/cli.js" "$CLAWGOD_DIR/cli.cjs" "$CLAWGOD_DIR/patch.mjs" "$CLAWGOD_DIR/patch.js" "$CLAWGOD_DIR/extract-natives.mjs" "$CLAWGOD_DIR/post-process.mjs" "$CLAWGOD_DIR/repatch.mjs" "$CLAWGOD_DIR/openai-proxy.cjs" "$CLAWGOD_DIR/clawgod-import" "$CLAWGOD_DIR/.source-version" "$CLAWGOD_DIR/.clawgod-version" "$CLAWGOD_DIR/.update-check"
+  rm -rf "$CLAWGOD_DIR/node_modules" "$CLAWGOD_DIR/vendor" "$CLAWGOD_DIR/versions" "$CLAWGOD_DIR/bun-runtime" "$CLAWGOD_DIR/cli.original.js" "$CLAWGOD_DIR/cli.original.js.bak" "$CLAWGOD_DIR/cli.original.cjs" "$CLAWGOD_DIR/cli.original.cjs.bak" "$CLAWGOD_DIR/cli.js" "$CLAWGOD_DIR/cli.cjs" "$CLAWGOD_DIR/patch.mjs" "$CLAWGOD_DIR/patch.js" "$CLAWGOD_DIR/extract-natives.mjs" "$CLAWGOD_DIR/post-process.mjs" "$CLAWGOD_DIR/repatch.mjs" "$CLAWGOD_DIR/openai-proxy.cjs" "$CLAWGOD_DIR/clawgod-import" "$CLAWGOD_DIR/.source-version" "$CLAWGOD_DIR/.clawgod-version" "$CLAWGOD_DIR/.update-check"
   hash -r 2>/dev/null
   info "ClawGod uninstalled"
   echo ""
@@ -202,6 +202,7 @@ info "ripgrep: $(rg --version | head -1)"
 
 # ─── Handle --no-upgrade (skip download, re-patch only) ──────────────
 mkdir -p "$CLAWGOD_DIR" "$BIN_DIR"
+NATIVE_BIN_LABEL=""
 
 if [ "$NO_UPGRADE" = "1" ]; then
   if [ ! -f "$CLAWGOD_DIR/cli.original.cjs" ]; then
@@ -212,6 +213,11 @@ if [ "$NO_UPGRADE" = "1" ]; then
   if [ -f "$CLAWGOD_DIR/cli.original.cjs.bak" ]; then
     cp "$CLAWGOD_DIR/cli.original.cjs.bak" "$CLAWGOD_DIR/cli.original.cjs"
     info "Restored clean cli.original.cjs from backup"
+  fi
+  NATIVE_BIN_LABEL=$(tr -d '\r\n' < "$CLAWGOD_DIR/.source-version" 2>/dev/null || true)
+  if [ -z "$NATIVE_BIN_LABEL" ]; then
+    warn "--no-upgrade requires a valid .source-version"
+    exit 1
   fi
   info "Skipping download (--no-upgrade)"
 else
@@ -320,14 +326,19 @@ EXTRACTOR_EOF
 # to $CLAWGOD_DIR/bunfs/ and vendor/<name>/<arch>-<os>/<name>.node, plus a
 # pathmap.json for post-process path rewriting.
 rm -rf "$CLAWGOD_DIR/vendor" "$CLAWGOD_DIR/bunfs" "$CLAWGOD_DIR/pathmap.json" \
-  "$CLAWGOD_DIR/cli.original.js" 2>/dev/null
+  "$CLAWGOD_DIR/cli.original.js" "$CLAWGOD_DIR/cli.original.cjs" \
+  "$CLAWGOD_DIR/cli.original.cjs.bak" 2>/dev/null
 
 dim "Extracting cli.js + modules from $(echo "$NATIVE_BIN_LABEL") ..."
-if ! node "$CLAWGOD_DIR/extract-natives.mjs" "$NATIVE_BIN" "$CLAWGOD_DIR" 2>&1 | while IFS= read -r line; do echo "  $line"; done; then
-  err "Failed to extract from native binary"
+if ! (
+  set -o pipefail
+  node "$CLAWGOD_DIR/extract-natives.mjs" "$NATIVE_BIN" "$CLAWGOD_DIR" 2>&1 |
+    while IFS= read -r line; do echo "  $line"; done
+); then
+  warn "Failed to extract from native binary"
   exit 1
 fi
-[ -f "$CLAWGOD_DIR/cli.original.js" ] || { err "cli.js missing after extraction"; exit 1; }
+[ -f "$CLAWGOD_DIR/cli.original.js" ] || { warn "cli.js missing after extraction"; exit 1; }
 
 # ─── Post-process cli.js for Bun runtime ──────────────────────
 # 0. Strip leading @bun pragma comments so Bun recognises the CJS wrapper
@@ -342,11 +353,15 @@ dim "Rewriting bunfs paths and IIFE invocation ..."
 cat > "$CLAWGOD_DIR/post-process.mjs" << 'POSTPROC_EOF'
 {{CLAWGOD:post-process.mjs}}
 POSTPROC_EOF
-node "$CLAWGOD_DIR/post-process.mjs" 2>&1 | while IFS= read -r line; do echo "  $line"; done
-[ -f "$CLAWGOD_DIR/cli.original.cjs" ] || { err "Post-process failed"; exit 1; }
-
-# Record the extracted source label.
-echo "$NATIVE_BIN_LABEL" > "$CLAWGOD_DIR/.source-version"
+if ! (
+  set -o pipefail
+  node "$CLAWGOD_DIR/post-process.mjs" 2>&1 |
+    while IFS= read -r line; do echo "  $line"; done
+); then
+  warn "Post-process failed"
+  exit 1
+fi
+[ -f "$CLAWGOD_DIR/cli.original.cjs" ] || { warn "Post-process failed"; exit 1; }
 
 # If we pulled the binary from npm into a tmpdir, clean it up now.
 if [ -n "$NATIVE_BIN_TMPDIR" ]; then
@@ -484,29 +499,25 @@ fi
 # first invocation.
 
 dim "Verifying Bun can load patched cli.original.cjs ..."
-sanity_out=$("$BUN_BIN" "$CLAWGOD_DIR/cli.cjs" --version 2>&1 || true)
-if echo "$sanity_out" | grep -q "Expected CommonJS module to have a function wrapper"; then
-  echo ""
-  warn "Bun $($BUN_BIN --version) cannot load Anthropic's cli.original.cjs."
-  warn ""
-  warn "  Anthropic builds with Bun's canary channel (currently ~1.3.14), while"
-  warn "  bun.sh's main download is on stable (currently 1.3.13). The canary build"
-  warn "  is NOT visible on bun.sh's download page — it lives on GitHub Releases"
-  warn "  and is reachable only via 'bun upgrade --canary'."
-  warn ""
-  warn "  If your bun is from bun.sh:"
-  warn "    bun upgrade --canary"
-  warn ""
-  warn "  If your bun is from a package manager (brew/apt/scoop) where the binary"
-  warn "  is behind a shim and refuses to self-replace ('bun upgrade' silently"
-  warn "  hangs or no-ops):"
-  warn "    <pkg-manager> uninstall bun"
-  warn "    curl -fsSL https://bun.sh/install | bash"
-  warn "    bun upgrade --canary"
-  warn ""
-  warn "  Then re-run install.sh — this sanity check will pass."
+if ! sanity_out=$("$BUN_BIN" "$CLAWGOD_DIR/cli.cjs" --version 2>&1); then
+  if echo "$sanity_out" | grep -q "Expected CommonJS module to have a function wrapper"; then
+    echo ""
+    warn "Bun $($BUN_BIN --version) cannot load Anthropic's cli.original.cjs."
+    warn ""
+    warn "  Anthropic builds with Bun's canary channel. Upgrade Bun with:"
+    warn "    bun upgrade --canary"
+  else
+    warn "Patched Claude failed to start:"
+    printf '%s\n' "$sanity_out" >&2
+  fi
   exit 1
 fi
+if ! printf '%s\n' "$sanity_out" | grep -Fxq "$NATIVE_BIN_LABEL (Claude Code)"; then
+  warn "Patched Claude reported an unexpected version: $sanity_out"
+  exit 1
+fi
+printf '%s\n' "$NATIVE_BIN_LABEL" > "$CLAWGOD_DIR/.source-version"
+rm -rf "$CLAWGOD_DIR/versions"
 info "Bun loads cli.original.cjs"
 
 # ─── Replace claude command ───────────────────────────

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
-const { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync, statSync, renameSync } = require('fs');
-const { join, basename } = require('path');
+const { readFileSync, existsSync, mkdirSync, writeFileSync, renameSync, rmSync, readdirSync } = require('fs');
+const { join } = require('path');
 const { homedir } = require('os');
 const { spawnSync } = require('child_process');
 
@@ -10,20 +10,92 @@ const enabledCapabilities = existsSync(patchesFile)
   ? new Set(JSON.parse(readFileSync(patchesFile, 'utf8')).enabled)
   : null;
 const capabilityEnabled = (id) => enabledCapabilities === null || enabledCapabilities.has(id);
+let artifactDir = clawgodDir;
 
-// Note: there used to be a "drift detection" block here that scanned
-// ~/.local/share/claude/versions/ for a newer binary and silently re-patched.
-// Removed because:
-//   1. Windows users don't have a `versions/` directory at all (Anthropic's
-//      Windows install doesn't follow that convention).
-//   2. We patch out `claude update` (it would otherwise overwrite the bun
-//      runtime under our launcher), so `versions/` no longer auto-grows
-//      on a healthy clawgod install.
-// In practice the block was reading a directory that never changes, but
-// could *retract* a fresher version that install.sh just pulled from npm
-// registry — putting users into a re-patch loop. Upgrades now go through
-// the patched `claude update` → install.sh redirect, which always pulls
-// the latest from npm.
+function readSourceVersion(dir) {
+  try { return readFileSync(join(dir, '.source-version'), 'utf8').trim(); }
+  catch { return ''; }
+}
+
+function wrappedClaudeExecutable() {
+  if (process.env.CLAUDE_CODE_ENTRYPOINT !== 'claude-vscode' || process.argv.length < 3) return null;
+  const candidate = process.argv[2];
+  if (!existsSync(candidate)) return null;
+  const normalized = candidate.replace(/\\/g, '/');
+  if (!/\/anthropic\.claude-code-[^/]+\/resources\/native-(?:binary|binaries\/[^/]+)\/claude(?:\.exe)?$/.test(normalized)) return null;
+  process.argv.splice(2, 1);
+  return candidate;
+}
+
+function queryClaudeVersion(executable) {
+  const result = spawnSync(executable, ['--version'], {
+    encoding: 'utf8',
+    timeout: 10000,
+    windowsHide: true,
+  });
+  if (result.status !== 0 || result.error || typeof result.stdout !== 'string') return null;
+  return result.stdout.trim().match(/^([0-9]+(?:\.[0-9]+){2}(?:-[0-9A-Za-z.-]+)?) \(Claude Code\)$/)?.[1] || null;
+}
+
+function validArtifact(dir, version) {
+  const entry = join(dir, 'cli.original.cjs');
+  if (!existsSync(entry) || readSourceVersion(dir) !== version) return false;
+  return !existsSync(join(dir, 'pathmap.json')) || existsSync(join(dir, 'bunfs'));
+}
+
+function selectWrappedArtifact() {
+  const executable = wrappedClaudeExecutable();
+  if (!executable) return;
+
+  process.env.CLAUDE_CODE_EXECPATH = executable;
+  const version = queryClaudeVersion(executable);
+  if (!version) {
+    process.stderr.write('[clawgod] Could not identify wrapped Claude; using the installed patched version.\n');
+    return;
+  }
+  if (validArtifact(clawgodDir, version)) return;
+
+  const versionsDir = join(clawgodDir, 'versions');
+  const target = join(versionsDir, version);
+  if (validArtifact(target, version)) {
+    artifactDir = target;
+    return;
+  }
+
+  if (existsSync(target)) rmSync(target, { recursive: true, force: true });
+  try {
+    for (const entry of readdirSync(versionsDir)) {
+      if (entry.startsWith(`.${version}.tmp-`)) {
+        rmSync(join(versionsDir, entry), { recursive: true, force: true });
+      }
+    }
+  } catch {}
+
+  mkdirSync(versionsDir, { recursive: true });
+  const stage = join(versionsDir, `.${version}.tmp-${process.pid}-${Math.random().toString(16).slice(2)}`);
+  try {
+    const result = spawnSync(process.execPath, [join(clawgodDir, 'repatch.mjs'), executable, stage, version], {
+      encoding: 'utf8',
+      timeout: 120000,
+      windowsHide: true,
+    });
+    if (result.stderr) process.stderr.write(result.stderr);
+    if (result.status !== 0 || !validArtifact(stage, version)) throw new Error('build failed');
+    try {
+      renameSync(stage, target);
+    } catch {
+      if (!validArtifact(target, version)) throw new Error('publish failed');
+      rmSync(stage, { recursive: true, force: true });
+    }
+    artifactDir = target;
+  } catch {
+    rmSync(stage, { recursive: true, force: true });
+    if (validArtifact(target, version)) artifactDir = target;
+    else process.stderr.write(`[clawgod] Could not patch wrapped Claude ${version}; using the installed patched version.\n`);
+  }
+}
+
+selectWrappedArtifact();
 
 // One-time migration: earlier wrapper versions set CLAUDE_CONFIG_DIR=~/.clawgod,
 // which made Claude Code read/write ~/.clawgod/.claude.json instead of the
@@ -242,4 +314,4 @@ if (capabilityEnabled('clawgod.update-notification')) try {
   }
 } catch {}
 
-require('./cli.original.cjs');
+require(join(artifactDir, 'cli.original.cjs'));

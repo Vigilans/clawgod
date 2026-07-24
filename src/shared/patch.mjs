@@ -7,7 +7,14 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const TARGET = join(__dirname, 'cli.original.cjs');
+const args = process.argv.slice(2);
+const targetIndex = args.indexOf('--target');
+if (targetIndex >= 0 && !args[targetIndex + 1]) {
+  console.error('❌ --target requires an artifact directory');
+  process.exit(1);
+}
+const artifactDir = targetIndex >= 0 ? args[targetIndex + 1] : __dirname;
+const TARGET = join(artifactDir, 'cli.original.cjs');
 const BACKUP = TARGET + '.bak';
 const patchesFile = join(__dirname, 'patches.json');
 const enabledCapabilities = existsSync(patchesFile)
@@ -883,12 +890,11 @@ const patches = [
 // ─── Main ─────────────────────────────────────────────────
 
 // cli.original path (legacy single-bundle) or graph dir (v2.1.245+)
-const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
 const verify = args.includes('--verify');
 const revert = args.includes('--revert');
 
-const GRAPH_DIR = join(__dirname, 'bunfs');
+const GRAPH_DIR = join(artifactDir, 'bunfs');
 const isGraph = existsSync(GRAPH_DIR);
 
 if (revert) {
@@ -929,7 +935,7 @@ const isCJSBundle = !isGraph; // legacy
 
 console.log(`\n${'═'.repeat(55)}`);
 console.log(`  ClawGod (universal)`);
-console.log(`  Target: cli.original.cjs (v${version}) ${isGraph ? `[graph: ${Object.keys(files).length} files]` : ''}`);
+console.log(`  Target: ${TARGET} (v${version}) ${isGraph ? `[graph: ${Object.keys(files).length} files]` : ''}`);
 console.log(`  Mode: ${dryRun ? 'DRY RUN' : verify ? 'VERIFY' : 'APPLY'}`);
 console.log(`${'═'.repeat(55)}\n`);
 
@@ -1046,7 +1052,7 @@ for (const p of patches) {
 console.log(`\n${'─'.repeat(55)}`);
 console.log(`  Result: ${applied} applied, ${skipped} skipped, ${disabled} disabled, ${failed} failed`);
 
-if (!dryRun && !verify && applied > 0) {
+if (!dryRun && !verify && failed === 0 && applied > 0) {
   // backup the entry (legacy semantics); graph writes all files in place
   if (!existsSync(BACKUP)) {
     copyFileSync(TARGET, BACKUP);
@@ -1060,3 +1066,4 @@ if (!dryRun && !verify && applied > 0) {
 }
 
 console.log(`${'═'.repeat(55)}\n`);
+if (failed > 0) process.exit(1);
