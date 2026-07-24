@@ -73,7 +73,7 @@ if ($Uninstall) {
         Write-OK "Removed clawgod alias"
     }
 
-    foreach ($f in @("cli.js","cli.cjs","cli.original.js","cli.original.cjs","cli.original.js.bak","cli.original.cjs.bak","patch.js","patch.mjs","extract-natives.mjs","post-process.mjs","repatch.mjs","openai-proxy.cjs","feature-gates.cjs","runtime-helpers.cjs","clawgod-import.exe",".source-version",".clawgod-version",".update-check","node_modules","bun-runtime","vendor","bunfs","pathmap.json")) {
+    foreach ($f in @("cli.js","cli.cjs","cli.original.js","cli.original.cjs","cli.original.js.bak","cli.original.cjs.bak","patch.js","patch.mjs","extract-natives.mjs","post-process.mjs","repatch.mjs","openai-proxy.cjs","feature-gates.cjs","runtime-helpers.cjs","clawgod-import.exe",".source-version",".clawgod-version",".update-check","node_modules","bun-runtime","vendor","bunfs","pathmap.json","versions")) {
         $p = Join-Path $ClawDir $f
         if (Test-Path $p) { Remove-Item -Recurse -Force $p }
     }
@@ -247,6 +247,16 @@ if ($NoUpgrade) {
         Copy-Item $existingBak $existingCjs -Force
         Write-OK "Restored clean cli.original.cjs from backup"
     }
+    $sourceVersionFile = Join-Path $ClawDir ".source-version"
+    if (-not (Test-Path $sourceVersionFile)) {
+        Write-Err "-NoUpgrade requires a valid .source-version"
+        exit 1
+    }
+    $NativeBinLabel = (Get-Content $sourceVersionFile -Raw).Trim()
+    if (-not $NativeBinLabel) {
+        Write-Err "-NoUpgrade requires a valid .source-version"
+        exit 1
+    }
     Write-OK "Skipping download (-NoUpgrade)"
 } else {
 
@@ -389,6 +399,10 @@ if (Test-Path $PathMap) { Remove-Item -Force $PathMap }
 
 $dstCli = Join-Path $ClawDir "cli.original.js"
 if (Test-Path $dstCli) { Remove-Item -Force $dstCli }
+foreach ($name in @("cli.original.cjs", "cli.original.cjs.bak")) {
+    $path = Join-Path $ClawDir $name
+    if (Test-Path $path) { Remove-Item -Force $path }
+}
 
 Write-Dim "Extracting cli.js + napi modules from $NativeBinLabel ..."
 & node $extractorPath $NativeBin $ClawDir 2>&1 | ForEach-Object { Write-Host "  $_" }
@@ -411,9 +425,6 @@ if (-not (Test-Path (Join-Path $ClawDir "cli.original.cjs"))) {
     Write-Err "Post-process failed"
     exit 1
 }
-
-# Record the extracted source label.
-Set-Content -Path (Join-Path $ClawDir ".source-version") -Value $NativeBinLabel -Encoding ASCII
 
 # If we pulled the binary from npm into a tmpdir, clean it up now.
 if ($NativeBinTmpDir -and (Test-Path $NativeBinTmpDir)) {
@@ -600,6 +611,14 @@ if ($sanityExitCode -ne 0) {
     Write-Err "$sanityOut"
     exit $sanityExitCode
 }
+$expectedVersion = "$NativeBinLabel (Claude Code)"
+if (-not (($sanityOut -split '\r?\n') -contains $expectedVersion)) {
+    Write-Err "Patched Claude reported an unexpected version: $sanityOut"
+    exit 1
+}
+Set-Content -Path (Join-Path $ClawDir ".source-version") -Value $NativeBinLabel -Encoding ASCII
+$versionsDir = Join-Path $ClawDir "versions"
+if (Test-Path $versionsDir) { Remove-Item -Recurse -Force $versionsDir }
 Write-OK "Bun loads cli.original.cjs"
 
 # --- Replace claude command -------------------------------------------

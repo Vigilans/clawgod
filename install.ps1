@@ -73,7 +73,7 @@ if ($Uninstall) {
         Write-OK "Removed clawgod alias"
     }
 
-    foreach ($f in @("cli.js","cli.cjs","cli.original.js","cli.original.cjs","cli.original.js.bak","cli.original.cjs.bak","patch.js","patch.mjs","extract-natives.mjs","post-process.mjs","repatch.mjs","openai-proxy.cjs","feature-gates.cjs","runtime-helpers.cjs","clawgod-import.exe",".source-version",".clawgod-version",".update-check","node_modules","bun-runtime","vendor","bunfs","pathmap.json")) {
+    foreach ($f in @("cli.js","cli.cjs","cli.original.js","cli.original.cjs","cli.original.js.bak","cli.original.cjs.bak","patch.js","patch.mjs","extract-natives.mjs","post-process.mjs","repatch.mjs","openai-proxy.cjs","feature-gates.cjs","runtime-helpers.cjs","clawgod-import.exe",".source-version",".clawgod-version",".update-check","node_modules","bun-runtime","vendor","bunfs","pathmap.json","versions")) {
         $p = Join-Path $ClawDir $f
         if (Test-Path $p) { Remove-Item -Recurse -Force $p }
     }
@@ -532,6 +532,16 @@ if ($NoUpgrade) {
     if (Test-Path $existingBak) {
         Copy-Item $existingBak $existingCjs -Force
         Write-OK "Restored clean cli.original.cjs from backup"
+    }
+    $sourceVersionFile = Join-Path $ClawDir ".source-version"
+    if (-not (Test-Path $sourceVersionFile)) {
+        Write-Err "-NoUpgrade requires a valid .source-version"
+        exit 1
+    }
+    $NativeBinLabel = (Get-Content $sourceVersionFile -Raw).Trim()
+    if (-not $NativeBinLabel) {
+        Write-Err "-NoUpgrade requires a valid .source-version"
+        exit 1
     }
     Write-OK "Skipping download (-NoUpgrade)"
 } else {
@@ -1155,6 +1165,10 @@ if (Test-Path $PathMap) { Remove-Item -Force $PathMap }
 
 $dstCli = Join-Path $ClawDir "cli.original.js"
 if (Test-Path $dstCli) { Remove-Item -Force $dstCli }
+foreach ($name in @("cli.original.cjs", "cli.original.cjs.bak")) {
+    $path = Join-Path $ClawDir $name
+    if (Test-Path $path) { Remove-Item -Force $path }
+}
 
 Write-Dim "Extracting cli.js + napi modules from $NativeBinLabel ..."
 & node $extractorPath $NativeBin $ClawDir 2>&1 | ForEach-Object { Write-Host "  $_" }
@@ -1171,13 +1185,14 @@ Write-Dim "Rewriting bunfs paths and IIFE invocation ..."
 $postProc = Join-Path $ClawDir "post-process.mjs"
 @'
 import { readFileSync, writeFileSync, unlinkSync, existsSync, readdirSync } from 'fs';
-import { dirname, join } from 'path';
+import { dirname, join, relative } from 'path';
 import { fileURLToPath } from 'url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const src = `${here}/cli.original.js`;
-const dst = `${here}/cli.original.cjs`;
-const pathMapFile = `${here}/pathmap.json`;
+const artifactDir = process.argv[2] || here;
+const src = join(artifactDir, 'cli.original.js');
+const dst = join(artifactDir, 'cli.original.cjs');
+const pathMapFile = join(artifactDir, 'pathmap.json');
 
 let code = readFileSync(src, 'utf8');
 
@@ -1201,42 +1216,37 @@ function fixFileURLs(c) {
 if (isChunked) {
   // \u2500\u2500 v2.1.245+ ESM chunk graph path \u2500\u2500
   const pathMap = JSON.parse(readFileSync(pathMapFile, 'utf8'));
-  // build the replace table: /$bunfs/root/X \u2192 <here>/<relative-on-disk>
-  const replaceTable = new Map();
-  for (const [bunPath, rel] of Object.entries(pathMap)) {
-    replaceTable.set(bunPath, join(here, rel));
-  }
-
-  function rewriteGraph(text) {
+  function rewriteGraph(text, sourcePath) {
     // Replace string literals containing the virtual in-bundle root
     // (POSIX "/$bunfs/root/..." or Windows single-drive "B:/~BUN/root/...")
-    // with the on-disk absolute path from the replace table.
+    // with a relative path so an atomically staged artifact remains valid
+    // after its directory is renamed into the version cache.
     return text.replace(/["'`](?:\/\$bunfs\/root|[A-Za-z]:\/~BUN\/root)\/[^"'`]+["'`]/g, (m) => {
       const body = m.slice(1, -1);
-      const target = replaceTable.get(body) || replaceTable.get(body.replaceAll('\\','/'));
-      // JSON.stringify emits a valid JS string literal. This is essential on
-      // Windows, where path.join() returns backslashes that would otherwise be
-      // interpreted as escapes (for example, \b in "\bunfs").
-      return target ? JSON.stringify(target) : m;
+      const rel = pathMap[body] || pathMap[body.replaceAll('\\','/')];
+      if (!rel) return m;
+      let target = relative(dirname(sourcePath), join(artifactDir, rel)).replaceAll('\\', '/');
+      if (!target.startsWith('.')) target = `./${target}`;
+      return JSON.stringify(target);
     });
   }
 
   // entry \u2192 cli.original.cjs (ESM, no IIFE wrap)
   code = stripPragma(code);
-  code = rewriteGraph(code);
+  code = rewriteGraph(code, dst);
   code = fixFileURLs(code);
   writeFileSync(dst, code);
   unlinkSync(src);
 
   // rewrite every chunk/asset file in bunfs/ in place
-  const bunfsDir = join(here, 'bunfs');
+  const bunfsDir = join(artifactDir, 'bunfs');
   let n = 0;
   for (const f of readdirSync(bunfsDir)) {
     if (!f.endsWith('.js') && !f.endsWith('.mjs')) continue;
     const fp = join(bunfsDir, f);
     let fc = readFileSync(fp, 'utf8');
     fc = stripPragma(fc);
-    fc = rewriteGraph(fc);
+    fc = rewriteGraph(fc, fp);
     fc = fixFileURLs(fc);
     writeFileSync(fp, fc);
     n++;
@@ -1269,9 +1279,6 @@ if (-not (Test-Path (Join-Path $ClawDir "cli.original.cjs"))) {
     exit 1
 }
 
-# Record the extracted source label.
-Set-Content -Path (Join-Path $ClawDir ".source-version") -Value $NativeBinLabel -Encoding ASCII
-
 # If we pulled the binary from npm into a tmpdir, clean it up now.
 if ($NativeBinTmpDir -and (Test-Path $NativeBinTmpDir)) {
     Remove-Item -Recurse -Force $NativeBinTmpDir -ErrorAction SilentlyContinue
@@ -1288,28 +1295,48 @@ Write-OK "cli.original.cjs ready ($NativeBinLabel)"
 // Re-extract + post-process + patch a supplied native Claude binary.
 import { spawnSync } from 'child_process';
 import { writeFileSync, existsSync, mkdirSync, rmSync } from 'fs';
-import { dirname, join, basename } from 'path';
+import { dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const nativeBin = process.argv[2];
+const artifactDir = process.argv[3] || here;
+const requestedVersion = process.argv[4];
 
 if (!nativeBin || !existsSync(nativeBin)) {
   console.error('repatch: native binary path required and must exist');
   process.exit(1);
 }
 
-rmSync(join(here, 'vendor'), { recursive: true, force: true });
-rmSync(join(here, 'bunfs'), { recursive: true, force: true });
-rmSync(join(here, 'pathmap.json'), { force: true });
-rmSync(join(here, 'cli.original.js'), { force: true });
+function queryVersion() {
+  const result = spawnSync(nativeBin, ['--version'], {
+    encoding: 'utf8',
+    timeout: 10000,
+    windowsHide: true,
+  });
+  if (result.status !== 0 || result.error || typeof result.stdout !== 'string') return null;
+  return result.stdout.trim().match(/^([0-9]+(?:\.[0-9]+){2}(?:-[0-9A-Za-z.-]+)?) \(Claude Code\)$/)?.[1] || null;
+}
+
+const sourceVersion = queryVersion();
+if (!sourceVersion || (requestedVersion && requestedVersion !== sourceVersion)) {
+  console.error('repatch: native Claude version could not be verified');
+  process.exit(1);
+}
+
+mkdirSync(artifactDir, { recursive: true });
+for (const name of ['vendor', 'bunfs', 'pathmap.json', 'cli.original.js', 'cli.original.cjs', 'cli.original.cjs.bak', '.source-version']) {
+  rmSync(join(artifactDir, name), { recursive: true, force: true });
+}
 
 const runtime = process.execPath;
 
 function run(label, args) {
-  const r = spawnSync(runtime, args, { cwd: here, stdio: 'inherit' });
-  if (r.status !== 0) {
-    console.error(`repatch: ${label} failed (exit ${r.status})`);
+  const result = spawnSync(runtime, args, { cwd: here, encoding: 'utf8' });
+  if (result.stdout) process.stderr.write(result.stdout);
+  if (result.stderr) process.stderr.write(result.stderr);
+  if (result.status !== 0 || result.error) {
+    console.error(`repatch: ${label} failed (exit ${result.status})`);
     process.exit(1);
   }
 }
@@ -1318,12 +1345,27 @@ const extractor = join(here, 'extract-natives.mjs');
 const postProc = join(here, 'post-process.mjs');
 const patcher = join(here, 'patch.mjs');
 
-run('extract', [extractor, nativeBin, here]);
-run('post-process', [postProc]);
-run('patcher', [patcher]);
+run('extract', [extractor, nativeBin, artifactDir]);
+run('post-process', [postProc, artifactDir]);
+run('patcher', [patcher, '--target', artifactDir]);
 
-writeFileSync(join(here, '.source-version'), basename(nativeBin) + '\n');
-console.log(`[clawgod] re-patched to ${basename(nativeBin)}`);
+for (const arg of ['--version', '--help']) {
+  const smoke = spawnSync(runtime, [
+    '--preload', join(here, 'feature-gates.cjs'),
+    '--preload', join(here, 'runtime-helpers.cjs'),
+    join(artifactDir, 'cli.original.cjs'), arg,
+  ], { encoding: 'utf8', timeout: 30000, windowsHide: true });
+  if (smoke.status !== 0 || smoke.error || typeof smoke.stdout !== 'string' ||
+      (arg === '--version' && !smoke.stdout.includes(`${sourceVersion} (Claude Code)`))) {
+    if (smoke.stderr) process.stderr.write(smoke.stderr);
+    console.error(`repatch: patched Claude ${arg} check failed`);
+    process.exit(1);
+  }
+}
+
+writeFileSync(join(artifactDir, '.source-version'), sourceVersion + '\n');
+if (resolve(artifactDir) === resolve(here)) rmSync(join(here, 'versions'), { recursive: true, force: true });
+console.error(`[clawgod] patched Claude ${sourceVersion}`);
 '@ | Set-Content (Join-Path $ClawDir "repatch.mjs") -Encoding UTF8
 Write-OK "Re-patch helper installed (repatch.mjs)"
 
@@ -1590,8 +1632,8 @@ Write-OK "OpenAI-compatible proxy created (openai-proxy.cjs)"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 @'
 #!/usr/bin/env bun
-const { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync, statSync, renameSync } = require('fs');
-const { join, basename } = require('path');
+const { readFileSync, existsSync, mkdirSync, writeFileSync, renameSync, rmSync, readdirSync } = require('fs');
+const { join } = require('path');
 const { homedir } = require('os');
 const { spawnSync } = require('child_process');
 
@@ -1606,6 +1648,92 @@ if (process.argv[2] === 'import') {
   process.exit(result.status ?? 1);
 }
 const featureEnabled = require('./feature-gates.cjs').isEnabled;
+let artifactDir = clawgodDir;
+
+function readSourceVersion(dir) {
+  try { return readFileSync(join(dir, '.source-version'), 'utf8').trim(); }
+  catch { return ''; }
+}
+
+function wrappedClaudeExecutable() {
+  if (process.env.CLAUDE_CODE_ENTRYPOINT !== 'claude-vscode' || process.argv.length < 3) return null;
+  const candidate = process.argv[2];
+  if (!existsSync(candidate)) return null;
+  const normalized = candidate.replace(/\\/g, '/');
+  if (!/\/anthropic\.claude-code-[^/]+\/resources\/native-(?:binary|binaries\/[^/]+)\/claude(?:\.exe)?$/.test(normalized)) return null;
+  process.argv.splice(2, 1);
+  return candidate;
+}
+
+function queryClaudeVersion(executable) {
+  const result = spawnSync(executable, ['--version'], {
+    encoding: 'utf8',
+    timeout: 10000,
+    windowsHide: true,
+  });
+  if (result.status !== 0 || result.error || typeof result.stdout !== 'string') return null;
+  return result.stdout.trim().match(/^([0-9]+(?:\.[0-9]+){2}(?:-[0-9A-Za-z.-]+)?) \(Claude Code\)$/)?.[1] || null;
+}
+
+function validArtifact(dir, version) {
+  const entry = join(dir, 'cli.original.cjs');
+  if (!existsSync(entry) || readSourceVersion(dir) !== version) return false;
+  return !existsSync(join(dir, 'pathmap.json')) || existsSync(join(dir, 'bunfs'));
+}
+
+function selectWrappedArtifact() {
+  const executable = wrappedClaudeExecutable();
+  if (!executable) return;
+
+  process.env.CLAUDE_CODE_EXECPATH = executable;
+  const version = queryClaudeVersion(executable);
+  if (!version) {
+    process.stderr.write('[clawgod] Could not identify wrapped Claude; using the installed patched version.\n');
+    return;
+  }
+  if (validArtifact(clawgodDir, version)) return;
+
+  const versionsDir = join(clawgodDir, 'versions');
+  const target = join(versionsDir, version);
+  if (validArtifact(target, version)) {
+    artifactDir = target;
+    return;
+  }
+
+  if (existsSync(target)) rmSync(target, { recursive: true, force: true });
+  try {
+    for (const entry of readdirSync(versionsDir)) {
+      if (entry.startsWith(`.${version}.tmp-`)) {
+        rmSync(join(versionsDir, entry), { recursive: true, force: true });
+      }
+    }
+  } catch {}
+
+  mkdirSync(versionsDir, { recursive: true });
+  const stage = join(versionsDir, `.${version}.tmp-${process.pid}-${Math.random().toString(16).slice(2)}`);
+  try {
+    const result = spawnSync(process.execPath, [join(clawgodDir, 'repatch.mjs'), executable, stage, version], {
+      encoding: 'utf8',
+      timeout: 120000,
+      windowsHide: true,
+    });
+    if (result.stderr) process.stderr.write(result.stderr);
+    if (result.status !== 0 || !validArtifact(stage, version)) throw new Error('build failed');
+    try {
+      renameSync(stage, target);
+    } catch {
+      if (!validArtifact(target, version)) throw new Error('publish failed');
+      rmSync(stage, { recursive: true, force: true });
+    }
+    artifactDir = target;
+  } catch {
+    rmSync(stage, { recursive: true, force: true });
+    if (validArtifact(target, version)) artifactDir = target;
+    else process.stderr.write(`[clawgod] Could not patch wrapped Claude ${version}; using the installed patched version.\n`);
+  }
+}
+
+selectWrappedArtifact();
 
 // One-time migration: earlier wrapper versions set CLAUDE_CONFIG_DIR=~/.clawgod,
 // which made Claude Code read/write ~/.clawgod/.claude.json instead of the
@@ -1829,7 +1957,7 @@ if (featureEnabled('update-notification')) try {
 // the patched bundle reaches helpers through globalThis only.
 require('./runtime-helpers.cjs');
 
-require('./cli.original.cjs');
+require(join(artifactDir, 'cli.original.cjs'));
 '@ | Set-Content (Join-Path $ClawDir "cli.cjs") -Encoding UTF8
 Set-Content (Join-Path $ClawDir ".clawgod-version") $ClawSelfVersion
 Write-OK "Wrapper created (cli.cjs)"
@@ -1884,7 +2012,14 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const TARGET = join(__dirname, 'cli.original.cjs');
+const args = process.argv.slice(2);
+const targetIndex = args.indexOf('--target');
+if (targetIndex >= 0 && !args[targetIndex + 1]) {
+  console.error('\u274c --target requires an artifact directory');
+  process.exit(1);
+}
+const artifactDir = targetIndex >= 0 ? args[targetIndex + 1] : __dirname;
+const TARGET = join(artifactDir, 'cli.original.cjs');
 const BACKUP = TARGET + '.bak';
 
 // \u2500\u2500\u2500 Feature registry (toggle units) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
@@ -2960,7 +3095,6 @@ const patches = [
 // \u2500\u2500\u2500 Main \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
 // cli.original path (legacy single-bundle) or graph dir (v2.1.245+)
-const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
 const verify = args.includes('--verify');
 const revert = args.includes('--revert');
@@ -3033,7 +3167,7 @@ if (dumpFeatures) {
 // is decided at claude launch (wrapper loads patches.json +
 // CLAWGOD_FEATURE_* env) \u2014 never here.
 
-const GRAPH_DIR = join(__dirname, 'bunfs');
+const GRAPH_DIR = join(artifactDir, 'bunfs');
 const isGraph = existsSync(GRAPH_DIR);
 
 if (revert) {
@@ -3074,7 +3208,7 @@ const isCJSBundle = !isGraph; // legacy
 
 console.log(`\n${'\u2550'.repeat(55)}`);
 console.log(`  ClawGod (universal)`);
-console.log(`  Target: cli.original.cjs (v${version}) ${isGraph ? `[graph: ${Object.keys(files).length} files]` : ''}`);
+console.log(`  Target: ${TARGET} (v${version}) ${isGraph ? `[graph: ${Object.keys(files).length} files]` : ''}`);
 console.log(`  Mode: ${dryRun ? 'DRY RUN' : verify ? 'VERIFY' : 'APPLY'}`);
 console.log(`${'\u2550'.repeat(55)}\n`);
 
@@ -3185,7 +3319,7 @@ for (const p of patches) {
 console.log(`\n${'\u2500'.repeat(55)}`);
 console.log(`  Result: ${applied} applied, ${skipped} skipped, ${failed} failed`);
 
-if (!dryRun && !verify && applied > 0) {
+if (!dryRun && !verify && failed === 0 && applied > 0) {
   // backup the entry (legacy semantics); graph writes all files in place
   if (!existsSync(BACKUP)) {
     copyFileSync(TARGET, BACKUP);
@@ -3199,6 +3333,7 @@ if (!dryRun && !verify && applied > 0) {
 }
 
 console.log(`${'\u2550'.repeat(55)}\n`);
+if (failed > 0) process.exit(1);
 '@
 
 Set-Content (Join-Path $ClawDir "patch.mjs") $patcherCode -Encoding UTF8
@@ -3365,6 +3500,14 @@ if ($sanityExitCode -ne 0) {
     Write-Err "$sanityOut"
     exit $sanityExitCode
 }
+$expectedVersion = "$NativeBinLabel (Claude Code)"
+if (-not (($sanityOut -split '\r?\n') -contains $expectedVersion)) {
+    Write-Err "Patched Claude reported an unexpected version: $sanityOut"
+    exit 1
+}
+Set-Content -Path (Join-Path $ClawDir ".source-version") -Value $NativeBinLabel -Encoding ASCII
+$versionsDir = Join-Path $ClawDir "versions"
+if (Test-Path $versionsDir) { Remove-Item -Recurse -Force $versionsDir }
 Write-OK "Bun loads cli.original.cjs"
 
 # --- Replace claude command -------------------------------------------
