@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
-import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 const root = mkdtempSync(join(tmpdir(), 'clawgod-source-backup-'));
 const command = '.command("update").alias("upgrade").description("Update").action(s(async(A)=>{original()}))';
@@ -11,7 +12,6 @@ try {
   for (const graph of [false, true]) {
     const dir = join(root, graph ? 'graph' : 'legacy');
     mkdirSync(dir);
-    copyFileSync(new URL('./patch.mjs', import.meta.url), join(dir, 'patch.mjs'));
     const entry = join(dir, 'cli.original.cjs');
     if (graph) mkdirSync(join(dir, 'bunfs'));
     const target = graph ? join(dir, 'bunfs/commands.js') : entry;
@@ -24,7 +24,7 @@ try {
         writeFileSync(join(dir, 'bunfs/asset.txt'), 'unchanged asset');
       }
     };
-    const run = (...args) => spawnSync(process.execPath, [join(dir, 'patch.mjs'), ...args], { encoding: 'utf8' });
+    const run = (...args) => spawnSync(process.execPath, [fileURLToPath(new URL('./patch.mjs', import.meta.url)), '--target', dir, ...args], { encoding: 'utf8' });
     const succeeds = (...args) => {
       const result = run(...args);
       assert.equal(result.status, 0, result.stderr + result.stdout);

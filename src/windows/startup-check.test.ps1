@@ -18,6 +18,7 @@ try {
 $ErrorActionPreference = 'Stop'
 $ClawDir = $env:CLAWGOD_TEST_DIR
 $BunBin = (Get-Command node.exe).Source
+$NativeBinLabel = '2.1.285'
 function Write-Dim($message) { Write-Host $message }
 function Write-Err($message) { Write-Host $message }
 function Write-OK($message) { Write-Host $message }

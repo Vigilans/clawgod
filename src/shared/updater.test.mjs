@@ -23,7 +23,7 @@ try {
         process: { argv: ['bun', 'cli.cjs'], env, execPath: '/test/bun', stderr: { write() {} } },
         require(name) {
           if (name === 'os') return { homedir: () => home };
-          if (name === './cli.original.cjs') {
+          if (name === join(dir, 'cli.original.cjs')) {
             // Check at bundle load time, before upstream captures environment.
             assert.equal(env.DISABLE_AUTOUPDATER, '1', `${mode}, inherited=${inherited}`);
             loaded = true;

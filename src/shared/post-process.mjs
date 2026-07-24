@@ -1,11 +1,12 @@
 import { readFileSync, writeFileSync, unlinkSync, existsSync, readdirSync } from 'fs';
-import { dirname, join } from 'path';
+import { dirname, join, relative } from 'path';
 import { fileURLToPath } from 'url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const src = `${here}/cli.original.js`;
-const dst = `${here}/cli.original.cjs`;
-const pathMapFile = `${here}/pathmap.json`;
+const artifactDir = process.argv[2] || here;
+const src = join(artifactDir, 'cli.original.js');
+const dst = join(artifactDir, 'cli.original.cjs');
+const pathMapFile = join(artifactDir, 'pathmap.json');
 
 let code = readFileSync(src, 'utf8');
 
@@ -29,42 +30,37 @@ function fixFileURLs(c) {
 if (isChunked) {
   // ── v2.1.245+ ESM chunk graph path ──
   const pathMap = JSON.parse(readFileSync(pathMapFile, 'utf8'));
-  // build the replace table: /$bunfs/root/X → <here>/<relative-on-disk>
-  const replaceTable = new Map();
-  for (const [bunPath, rel] of Object.entries(pathMap)) {
-    replaceTable.set(bunPath, join(here, rel));
-  }
-
-  function rewriteGraph(text) {
+  function rewriteGraph(text, sourcePath) {
     // Replace string literals containing the virtual in-bundle root
     // (POSIX "/$bunfs/root/..." or Windows single-drive "B:/~BUN/root/...")
-    // with the on-disk absolute path from the replace table.
+    // with a relative path so an atomically staged artifact remains valid
+    // after its directory is renamed into the version cache.
     return text.replace(/["'`](?:\/\$bunfs\/root|[A-Za-z]:\/~BUN\/root)\/[^"'`]+["'`]/g, (m) => {
       const body = m.slice(1, -1);
-      const target = replaceTable.get(body) || replaceTable.get(body.replaceAll('\\','/'));
-      // JSON.stringify emits a valid JS string literal. This is essential on
-      // Windows, where path.join() returns backslashes that would otherwise be
-      // interpreted as escapes (for example, \b in "\bunfs").
-      return target ? JSON.stringify(target) : m;
+      const rel = pathMap[body] || pathMap[body.replaceAll('\\','/')];
+      if (!rel) return m;
+      let target = relative(dirname(sourcePath), join(artifactDir, rel)).replaceAll('\\', '/');
+      if (!target.startsWith('.')) target = `./${target}`;
+      return JSON.stringify(target);
     });
   }
 
   // entry → cli.original.cjs (ESM, no IIFE wrap)
   code = stripPragma(code);
-  code = rewriteGraph(code);
+  code = rewriteGraph(code, dst);
   code = fixFileURLs(code);
   writeFileSync(dst, code);
   unlinkSync(src);
 
   // rewrite every chunk/asset file in bunfs/ in place
-  const bunfsDir = join(here, 'bunfs');
+  const bunfsDir = join(artifactDir, 'bunfs');
   let n = 0;
   for (const f of readdirSync(bunfsDir)) {
     if (!f.endsWith('.js') && !f.endsWith('.mjs')) continue;
     const fp = join(bunfsDir, f);
     let fc = readFileSync(fp, 'utf8');
     fc = stripPragma(fc);
-    fc = rewriteGraph(fc);
+    fc = rewriteGraph(fc, fp);
     fc = fixFileURLs(fc);
     writeFileSync(fp, fc);
     n++;

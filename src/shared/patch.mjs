@@ -7,9 +7,16 @@ import { join, dirname, relative } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const TARGET = join(__dirname, 'cli.original.cjs');
+const args = process.argv.slice(2);
+const targetIndex = args.indexOf('--target');
+if (targetIndex >= 0 && !args[targetIndex + 1]) {
+  console.error('❌ --target requires an artifact directory');
+  process.exit(1);
+}
+const artifactDir = targetIndex >= 0 ? args[targetIndex + 1] : __dirname;
+const TARGET = join(artifactDir, 'cli.original.cjs');
 const BACKUP = TARGET + '.bak';
-const CLEAN_SOURCE = join(__dirname, 'source-backup.json');
+const CLEAN_SOURCE = join(artifactDir, 'source-backup.json');
 
 // ─── Feature registry (toggle units) ─────────────────────
 // A feature is the user-facing unit toggled via ~/.clawgod/patches.json
@@ -1103,7 +1110,6 @@ const patches = [
 // ─── Main ─────────────────────────────────────────────────
 
 // cli.original path (legacy single-bundle) or graph dir (v2.1.245+)
-const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
 const verify = args.includes('--verify');
 const revert = args.includes('--revert');
@@ -1177,7 +1183,7 @@ if (dumpFeatures) {
 // is decided at claude launch (wrapper loads patches.json +
 // CLAWGOD_FEATURE_* env) — never here.
 
-const GRAPH_DIR = join(__dirname, 'bunfs');
+const GRAPH_DIR = join(artifactDir, 'bunfs');
 const isGraph = existsSync(GRAPH_DIR);
 
 if (revert && !existsSync(CLEAN_SOURCE)) {
@@ -1218,7 +1224,7 @@ const isCJSBundle = !isGraph; // legacy
 // A single renamed JSON file avoids accepting an interrupted partial backup.
 if (captureCleanSource) {
   const snapshot = { format: 1, version, files: Object.fromEntries(
-    Object.entries(files).map(([name, content]) => [relative(__dirname, name).replaceAll('\\', '/'), content]),
+    Object.entries(files).map(([name, content]) => [relative(artifactDir, name).replaceAll('\\', '/'), content]),
   ) };
   const temporary = `${CLEAN_SOURCE}.${process.pid}.tmp`;
   writeFileSync(temporary, JSON.stringify(snapshot));
@@ -1231,7 +1237,7 @@ if (captureCleanSource) {
 if (existsSync(CLEAN_SOURCE) && !verify) {
   try {
     const snapshot = JSON.parse(readFileSync(CLEAN_SOURCE, 'utf8'));
-    const names = Object.keys(files).map(name => relative(__dirname, name).replaceAll('\\', '/')).sort();
+    const names = Object.keys(files).map(name => relative(artifactDir, name).replaceAll('\\', '/')).sort();
     if (snapshot.format !== 1 || snapshot.version !== version ||
         !snapshot.files || typeof snapshot.files !== 'object' ||
         JSON.stringify(Object.keys(snapshot.files).sort()) !== JSON.stringify(names) ||
@@ -1239,7 +1245,7 @@ if (existsSync(CLEAN_SOURCE) && !verify) {
       throw new Error('version or file set does not match the installed source');
     }
     // Keep the active files untouched until all patch checks succeed.
-    files = Object.fromEntries(names.map(name => [join(__dirname, name), snapshot.files[name]]));
+    files = Object.fromEntries(names.map(name => [join(artifactDir, name), snapshot.files[name]]));
     console.log(`Using clean source backup: ${names.length} files (v${version})`);
   } catch (error) {
     console.error(`Invalid clean-source backup: ${error.message}. Reinstall Claude ${version} without --no-upgrade.`);
@@ -1254,7 +1260,7 @@ if (revert) {
 
 console.log(`\n${'═'.repeat(55)}`);
 console.log(`  ClawGod (universal)`);
-console.log(`  Target: cli.original.cjs (v${version}) ${isGraph ? `[graph: ${Object.keys(files).length} files]` : ''}`);
+console.log(`  Target: ${TARGET} (v${version}) ${isGraph ? `[graph: ${Object.keys(files).length} files]` : ''}`);
 console.log(`  Mode: ${dryRun ? 'DRY RUN' : verify ? 'VERIFY' : 'APPLY'}`);
 console.log(`${'═'.repeat(55)}\n`);
 

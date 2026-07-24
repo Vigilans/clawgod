@@ -109,7 +109,7 @@ try {
       const target = join(testDir, graph ? 'bunfs/commands.js' : 'cli.original.cjs');
       writeFileSync(target, source);
       const result = spawnSync(process.execPath, [join(testDir, 'patch.mjs')], { encoding: 'utf8' });
-      assert.equal(result.status, 1);
+      assert.equal(result.status, 1, result.stdout + result.stderr);
       assert.match(result.stdout, /Ultraplan enable — regex stale/);
       assert.equal(readFileSync(target, 'utf8'), source);
     }

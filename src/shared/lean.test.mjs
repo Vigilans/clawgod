@@ -42,7 +42,7 @@ function launch(args = [], env = {}) {
       process: proc,
       require(name) {
         if (name === 'os') return { homedir: () => home };
-        if (name === './cli.original.cjs') { loaded = true; return {}; }
+        if (name === join(dir, 'cli.original.cjs')) { loaded = true; return {}; }
         if (name === './feature-gates.cjs') return { isEnabled: id => env['CLAWGOD_FEATURE_' + id.toUpperCase().replaceAll('-', '_')] !== 'false' };
         if (['./runtime-helpers.cjs', './bun-ant-shim.cjs'].includes(name)) return {};
         return require(name);

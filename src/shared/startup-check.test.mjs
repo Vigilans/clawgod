@@ -122,7 +122,7 @@ try {
           if (name === 'os') return { homedir: () => profile };
           if (name === './openai-proxy.cjs') throw new Error('version must not start a provider');
           if (['./feature-gates.cjs', './runtime-helpers.cjs', './bun-ant-shim.cjs'].includes(name)) { modules.push(name); return { isEnabled: () => true }; }
-          if (name === './cli.original.cjs') { loaded = true; return {}; }
+          if (name === join(dir, 'cli.original.cjs')) { loaded = true; return {}; }
           return require(name);
         },
       });
@@ -177,7 +177,7 @@ try {
     const section = template.slice(template.indexOf('dim "Verifying Bun'), template.indexOf('# ─── Replace claude command'));
     assert.ok(section.startsWith('dim "Verifying Bun'));
     fs.copyFileSync(checker, join(dir, 'startup-check.cjs'));
-    const script = `set -e\nCLAWGOD_DIR="$1"\nBUN_BIN="$2"\nwarn(){ printf '%s\\n' "$*"; }\ninfo(){ printf '%s\\n' "$*"; }\ndim(){ :; }\n${section}\nprintf 'launcher-step-reached\\n'\n`;
+    const script = `set -e\nCLAWGOD_DIR="$1"\nBUN_BIN="$2"\nNATIVE_BIN_LABEL=2.1.285\nwarn(){ printf '%s\\n' "$*"; }\ninfo(){ printf '%s\\n' "$*"; }\ndim(){ :; }\n${section}\nprintf 'launcher-step-reached\\n'\n`;
     for (const [code, expected] of [
       [`console.log(${JSON.stringify(version)});`, 0],
       ['console.error("fixture failed"); process.exit(7);', 7],
