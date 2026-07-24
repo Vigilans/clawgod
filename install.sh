@@ -1580,16 +1580,35 @@ const enabledCapabilities = existsSync(patchesFile)
 const patches = [
   {
     // Let users define model aliases with
-    // ANTHROPIC_DEFAULT_<ALIAS>_{MODEL,NAME,DESCRIPTION}. User, flag, and managed
-    // settings already copy arbitrary env values into process.env; project and
-    // local settings pass through this static allowlist instead. Extend that
-    // boundary so aliases work consistently from every settings scope.
+    // ANTHROPIC_DEFAULT_<ALIAS>_{MODEL,NAME,DESCRIPTION,SUPPORTED_CAPABILITIES}.
+    // User, flag, and managed settings copy arbitrary env values into
+    // process.env; project and local settings pass through an allowlist instead.
+    // Extend that boundary so aliases work consistently from every settings scope.
+    //
+    // ≥2.1.218: settings env flows through a filter pipeline
+    // (Gt_/jt_/Ut_/Kt_/Mt_/Ft_) and project/local scopes are written only via a
+    // final allowlist gate:
+    //   function BKt(e,t){let r=e.toUpperCase();return Rvh.has(r)||Lvh.has(r)&&Xt(t)}
+    // Rvh hardcodes the four built-in aliases. Append the custom-alias regex to
+    // the gate's return so project/local settings can set any alias.
+    capability: 'features.custom-model-aliases',
+    name: 'Allow custom alias env vars (BKt write gate, >=2.1.218)',
+    pattern: /function ([\w$]+)\(([\w$]+),([\w$]+)\)\{let ([\w$]+)=\2\.toUpperCase\(\);return ([\w$]+)\.has\(\4\)\|\|([\w$]+)\.has\(\4\)&&([\w$]+)\(\3\)\}/g,
+    replacer: (m, fn, key, val, upper, allow, truthySet, truthyFn) =>
+      `function ${fn}(${key},${val}){let ${upper}=${key}.toUpperCase();` +
+      `return ${allow}.has(${upper})||${truthySet}.has(${upper})&&${truthyFn}(${val})` +
+      `||/^ANTHROPIC_DEFAULT_[A-Z0-9_]+_(?:MODEL|NAME|DESCRIPTION|SUPPORTED_CAPABILITIES)$/.test(${upper})}`,
+    optional: true,  // ≤2.1.217 used the allowlist loop below
+  },
+  {
+    // ≤2.1.217: project/local settings env passed through a static allowlist
+    // loop. Extend the same boundary there.
     //
     // Source shape:
     //   for(let[key,value]of Object.entries(env))
     //     if(allowed.has(key.toUpperCase())) process.env[key]=value
     capability: 'features.custom-model-aliases',
-    name: 'Allow custom alias env vars from project/local settings',
+    name: 'Allow custom alias env vars (allowlist loop, <=2.1.217)',
     pattern: new RegExp(
       'for\\(let\\[([\\w$]+),([\\w$]+)\\]of Object\\.entries\\(([\\w$]+)\\)\\)' +
       'if\\(([\\w$]+)\\.has\\(\\1\\.toUpperCase\\(\\)\\)\\)' +
@@ -1599,7 +1618,7 @@ const patches = [
     replacer: (m, key, value, entries, allowlist) => {
       const customAliasSetting =
         '/^ANTHROPIC_DEFAULT_[A-Z0-9_]+_' +
-        '(?:MODEL|NAME|DESCRIPTION)$/.test(' + key + '.toUpperCase())';
+        '(?:MODEL|NAME|DESCRIPTION|SUPPORTED_CAPABILITIES)$/.test(' + key + '.toUpperCase())';
       return (
         `for(let[${key},${value}]of Object.entries(${entries}))` +
         `if(${allowlist}.has(${key}.toUpperCase())||${customAliasSetting})` +
@@ -1607,6 +1626,7 @@ const patches = [
       );
     },
     unique: true,
+    optional: true,  // removed in v2.1.218+ (BKt gate above)
   },
   {
     // Discover ANTHROPIC_DEFAULT_<ALIAS>_MODEL keys, normalize each alias from
