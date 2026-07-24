@@ -76,7 +76,7 @@ if ($Uninstall) {
         Write-OK "Removed clawgod alias"
     }
 
-    foreach ($f in @("cli.js","cli.cjs","cli.original.js","cli.original.cjs","cli.original.js.bak","cli.original.cjs.bak","source-backup.json","patch.js","patch.mjs","ast-patches.mjs","acorn.mjs","acorn.LICENSE","extract-natives.mjs","post-process.mjs","repatch.mjs","startup-check.cjs","startup-check.log","openai-proxy.cjs","feature-gates.cjs","runtime-helpers.cjs","bun-ant-shim.cjs","clawgod-import.exe","claude.staged.exe",".source-version",".clawgod-version",".update-check","node_modules","bun-runtime","vendor","bunfs","pathmap.json")) {
+    foreach ($f in @("cli.js","cli.cjs","cli.original.js","cli.original.cjs","cli.original.js.bak","cli.original.cjs.bak","source-backup.json","patch.js","patch.mjs","ast-patches.mjs","acorn.mjs","acorn.LICENSE","extract-natives.mjs","post-process.mjs","repatch.mjs","startup-check.cjs","startup-check.log","openai-proxy.cjs","feature-gates.cjs","runtime-helpers.cjs","bun-ant-shim.cjs","clawgod-import.exe","claude.staged.exe",".source-version",".clawgod-version",".update-check","node_modules","bun-runtime","vendor","bunfs","pathmap.json","versions")) {
         $p = Join-Path $ClawDir $f
         if (Test-Path $p) { Remove-Item -Recurse -Force $p }
     }
@@ -247,6 +247,12 @@ if ($NoUpgrade) {
     }
     if (Test-Path (Join-Path $ClawDir 'source-backup.json')) {
         Write-OK "Using complete clean-source backup (-NoUpgrade)"
+        $sourceVersionFile = Join-Path $ClawDir '.source-version'
+        $NativeBinLabel = if (Test-Path $sourceVersionFile) { (Get-Content $sourceVersionFile -Raw).Trim() } else { '' }
+        if (-not $NativeBinLabel) {
+            $NativeBinLabel = [regex]::Match((Get-Content $existingCjs -Raw), 'Version:\s*([\d.]+)').Groups[1].Value
+        }
+        if (-not $NativeBinLabel) { throw '-NoUpgrade requires an identifiable installed version' }
     } else {
         # Older installers backed up only the entry, not bunfs chunks. Recover
         # clean source from the exact installed version, never from latest.
@@ -451,6 +457,10 @@ if (Test-Path $PathMap) { Remove-Item -Force $PathMap }
 
 $dstCli = Join-Path $ClawDir "cli.original.js"
 if (Test-Path $dstCli) { Remove-Item -Force $dstCli }
+foreach ($name in @("cli.original.cjs", "cli.original.cjs.bak")) {
+    $path = Join-Path $ClawDir $name
+    if (Test-Path $path) { Remove-Item -Force $path }
+}
 
 Write-Dim "Extracting cli.js + napi modules from $NativeBinLabel ..."
 & node $extractorPath $NativeBin $ClawDir 2>&1 | ForEach-Object { Write-Host "  $_" }
@@ -476,9 +486,6 @@ if (($LASTEXITCODE -ne 0) -or -not (Test-Path (Join-Path $ClawDir "cli.original.
     exit 1
 }
 
-# Record the extracted source label.
-Set-Content -Path (Join-Path $ClawDir ".source-version") -Value $NativeBinLabel -Encoding ASCII
-
 # Keep the binary we just extracted from. cli.cjs points process.execPath at
 # claude.orig.exe, so everything Claude re-spawns from execPath (daemon,
 # background and forked sessions) runs that file, not the patched bundle. The
@@ -487,7 +494,6 @@ Set-Content -Path (Join-Path $ClawDir ".source-version") -Value $NativeBinLabel 
 if ($NativeBin -and (Test-Path $NativeBin)) {
     Move-Item -Force $NativeBin (Join-Path $ClawDir "claude.staged.exe")
 }
-
 # If we pulled the binary from npm into a tmpdir, clean it up now.
 if ($NativeBinTmpDir -and (Test-Path $NativeBinTmpDir)) {
     Remove-Item -Recurse -Force $NativeBinTmpDir -ErrorAction SilentlyContinue
@@ -746,6 +752,14 @@ if ($sanityExitCode -ne 0) {
     if (-not $NoUpgrade) { Restore-Install }
     exit $sanityExitCode
 }
+$expectedVersion = "$NativeBinLabel (Claude Code)"
+if (-not (($sanityOut -split '\r?\n') -contains $expectedVersion)) {
+    Write-Err "Patched Claude reported an unexpected version: $sanityOut"
+    exit 1
+}
+Set-Content -Path (Join-Path $ClawDir ".source-version") -Value $NativeBinLabel -Encoding ASCII
+$versionsDir = Join-Path $ClawDir "versions"
+if (Test-Path $versionsDir) { Remove-Item -Recurse -Force $versionsDir }
 Write-OK "Bun loads cli.original.cjs"
 $script:RollbackPending = $false
 if ($RollbackDir) { Remove-Item -LiteralPath $RollbackDir -Recurse -Force -ErrorAction SilentlyContinue }
