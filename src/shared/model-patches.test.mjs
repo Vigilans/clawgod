@@ -67,3 +67,12 @@ for (const enabled of [false, true]) for (const name of ['Agent', 'Bash']) {
   }
 }
 console.log('[model-patches.test] hook validation gates ok');
+
+const writeGate = apply('custom-alias-env-write','function put(key,value){let upper=key.toUpperCase();return allowed.has(upper)||truthy.has(upper)&&enabled(value)}');
+for (const enabled of [false,true]) {
+  const allowed = new Set(['KNOWN']);
+  const context = {__clawgodPatches:{'custom-alias-env-write':enabled},allowed,truthy:new Set(),enabled:()=>true};
+  assert.equal(runInNewContext(writeGate+';put("ANTHROPIC_DEFAULT_CUSTOM_MODEL","value")',context),enabled);
+  assert.equal(runInNewContext(writeGate+';put("KNOWN","value")',context),true);
+}
+console.log('[model-patches.test] project alias write gate ok');
