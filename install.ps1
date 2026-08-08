@@ -2045,10 +2045,13 @@ const patches = [
   {
     capability: 'clawgod.features-config',
     name: 'GrowthBook env overrides',
-    pattern: /function ([\w$]+)\(\)\{if\(!([\w$]+)\)=!0;return ([\w$]+)\}/g,
-    replacer: (m, fn, flag, val) =>
-      `function ${fn}(){if(!${flag}){${flag}=!0;try{let e=process.env.CLAUDE_INTERNAL_FC_OVERRIDES;if(e)${val}=JSON.parse(e)}catch(e){}}return ${val}}`,
+    pattern: /function ([\w$]+)\(\)\{(?:if\(!([\w$]+)\)\2=!0;return ([\w$]+)\}|if\(([\w$]+)\)return ([\w$]+);return \4=!0,\5;)\}/g,
+    replacer: (m, fn, oldFlag, oldVal, flag, val) =>
+      oldFlag
+        ? `function ${fn}(){if(!${oldFlag}){${oldFlag}=!0;try{let e=process.env.CLAUDE_INTERNAL_FC_OVERRIDES;if(e)${oldVal}=JSON.parse(e)}catch(e){}}return ${oldVal}}`
+        : `function ${fn}(){if(${flag})return ${val};${flag}=!0;`,
     unique: true,  // must match exactly 1
+    sentinel: 'return N0t;return bLa=!0,N0t;let e=process.env.CLAUDE_INTERNAL_FC_OVERRIDES',
   },
   {
     // v2.1.245+ moved env-override parsing into a GrowthBook class method and
@@ -2083,8 +2086,9 @@ const patches = [
   {
     capability: 'features.agent-teams',
     name: 'Agent Teams always enabled',
-    pattern: /function ([\w$]+)\(\)\{if\(![\w$]+\(process\.env\.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS\)&&![\w$]+\(\)\)return!1;if\(![\w$]+\("tengu_amber_flint",!0\)\)return!1;return!0\}/g,
+    pattern: /function ([\w$]+)\(\)\{if\(!(?:[\w$]+\(process\.env\.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS\)|[\w$]+\.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS)&&![\w$]+\(\)\)return!1;if\(![\w$]+\("tengu_amber_flint",!0\)\)return!1;return!0\}/g,
     replacer: (m, fn) => `function ${fn}(){return!0}`,
+    sentinel: 'tengu_amber_flint',
   },
   {
     // v2.1.245+ Agent Teams gate became an exported module in its own chunk
@@ -2152,14 +2156,16 @@ const patches = [
   {
     capability: 'features.computer-use',
     name: 'Computer Use gate bypass',
-    pattern: /function ([\w$]+)\(\)\{return [\w$]+\(\)&&[\w$]+\(\)\.enabled\}/g,
+    pattern: /function ([\w$]+)\(\)\{(?:if\([\w$]+\("hipaa"\)\)return!1;)?return [\w$]+\(\)&&[\w$]+\(\)\.enabled\}/g,
     replacer: (m, fn) => `function ${fn}(){return!0}`,
+    sentinel: '&&jWs().enabled}',
   },
   {
     capability: 'features.voice-mode',
     name: 'Voice Mode enable (bypass GrowthBook kill)',
-    pattern: /function ([\w$]+)\(\)\{return![\w$]+\("tengu_amber_quartz_disabled",!1\)\}/g,
+    pattern: /function ([\w$]+)\(\)\{return ?(?:![\w$]+\("tengu_amber_quartz_disabled",!1\)|[\w$]+\("allow_voice_mode"\))\}/g,
     replacer: (m, fn) => `function ${fn}(){return!0}`,
+    sentinel: ['tengu_amber_quartz_disabled', '"allow_voice_mode")}'],
   },
   {
     // v2.1.158+: provider gate refactored into helper function:
