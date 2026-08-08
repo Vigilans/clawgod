@@ -156,7 +156,7 @@ const patches = [
     toggleable: true,
     name: 'Extend Agent model schema with custom aliases',
     pattern: new RegExp(
-      'model:([\\w$]+)\\.enum\\(\\["sonnet","opus","haiku","fable"\\]\\)' +
+      'model:([\\w$]+(?:\\.enum)?)\\(\\["sonnet","opus","haiku","fable"\\]\\)' +
       '\\.optional\\(\\)\\.describe\\(`([^`]+)`\\)',
       'g'
     ),
@@ -170,13 +170,14 @@ const patches = [
         '.toLowerCase().replace(/_/g,"-")})' +
         '.filter(function(k){return!["sonnet","opus","haiku","fable"].includes(k)})';
       return (
-        `model:(${gate('custom-alias-schema')}?${schema}.enum(["sonnet","opus","haiku","fable",...${aliasScan}])` +
+        `model:(${gate('custom-alias-schema')}?${schema}(["sonnet","opus","haiku","fable",...${aliasScan}])` +
         `.optional().describe(\`${description} ` +
         `Custom aliases are configured with ANTHROPIC_DEFAULT_<ALIAS>_MODEL.\`)` +
         `:${m.slice(6)})`
       );
     },
     unique: true,
+    sentinel: '"sonnet","opus","haiku","fable"]).optional().describe(',
   },
   {
     // Add the same normalized aliases to the /model picker. Display the resolved
@@ -284,7 +285,7 @@ const patches = [
       '([\\w$]+)=\\2\\.success\\?\\[\\]:\\2\\.error\\.issues\\.filter\\(' +
       '\\(([\\w$]+)\\)=>\\5\\.code!=="unrecognized_keys"\\);' +
       'if\\(!\\2\\.success&&\\4\\.length>0\\)\\{' +
-      'let ([\\w$]+)=new ([\\w$]+)\\.ZodError\\(\\4\\),' +
+      'let ([\\w$]+)=new (?:[\\w$]+\\.)?([\\w$]+)\\(\\4\\),' +
       '([\\w$]+)=`PreToolUse hook for \\$\\{\\3\\.name\\} returned updatedInput ' +
       'that failed schema validation: ',
       'g'
