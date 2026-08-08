@@ -2358,10 +2358,12 @@ const patches = [
     id: 'growthbook-env-overrides',
     toggleable: true,
     name: 'GrowthBook env overrides',
-    pattern: /function ([\w$]+)\(\)\{if\(!([\w$]+)\)=!0;return ([\w$]+)\}/g,
-    replacer: (m, fn, flag, val) =>
-      `function ${fn}(){if(!${flag}){${flag}=!0;try{let e=${gate('growthbook-env-overrides')}?process.env.CLAUDE_INTERNAL_FC_OVERRIDES:void 0;if(e)${val}=JSON.parse(e)}catch(e){}}return ${val}}`,
+    pattern: /function ([\w$]+)\(\)\{(?:if\(!([\w$]+)\)\2=!0;return ([\w$]+)\}|if\(([\w$]+)\)return ([\w$]+);return \4=!0,\5;(?=let [\w$]+=process\.env\.CLAUDE_INTERNAL_FC_OVERRIDES))/g,
+    replacer: (m, fn, oldFlag, oldVal, flag, val) => oldFlag
+      ? `function ${fn}(){if(!${oldFlag}){${oldFlag}=!0;try{let e=${gate('growthbook-env-overrides')}?process.env.CLAUDE_INTERNAL_FC_OVERRIDES:void 0;if(e)${oldVal}=JSON.parse(e)}catch(e){}}return ${oldVal}}`
+      : `function ${fn}(){if(${flag})return ${val};${flag}=!0;if(!(${gate('growthbook-env-overrides')}))return ${val};`,
     unique: true,  // must match exactly 1
+    sentinel: 'return N0t;return bLa=!0,N0t;let e=process.env.CLAUDE_INTERNAL_FC_OVERRIDES',
   },
   {
     // v2.1.245+ moved env-override parsing into a GrowthBook class method and
@@ -2475,15 +2477,17 @@ const patches = [
     id: 'computer-use-gate',
     toggleable: true,
     name: 'Computer Use gate bypass',
-    pattern: /function ([\w$]+)\(\)\{return [\w$]+\(\)&&[\w$]+\(\)\.enabled\}/g,
-    replacer: (m, fn) => `function ${fn}(){return ${gate('computer-use-gate')}?!0:(${m.slice(`function ${fn}(){return `.length, -1)})}`,
+    pattern: /function ([\w$]+)\(\)\{(?:if\([\w$]+\("hipaa"\)\)return!1;)?return [\w$]+\(\)&&[\w$]+\(\)\.enabled\}/g,
+    replacer: (m, fn) => `function ${fn}(){if(${gate('computer-use-gate')})return!0;` + m.slice(`function ${fn}(){`.length),
+    sentinel: '&&jWs().enabled}',
   },
   {
     id: 'voice-mode',
     toggleable: true,
     name: 'Voice Mode enable (bypass GrowthBook kill)',
-    pattern: /function ([\w$]+)\(\)\{return![\w$]+\("tengu_amber_quartz_disabled",!1\)\}/g,
-    replacer: (m, fn) => `function ${fn}(){return ${gate('voice-mode')}?!0:(${m.slice(`function ${fn}(){return`.length, -1)})}`,
+    pattern: /function ([\w$]+)\(\)\{return ?(?:![\w$]+\("tengu_amber_quartz_disabled",!1\)|[\w$]+\("allow_voice_mode"\))\}/g,
+    replacer: (m, fn) => `function ${fn}(){if(${gate('voice-mode')})return!0;` + m.slice(`function ${fn}(){`.length),
+    sentinel: ['tengu_amber_quartz_disabled', '"allow_voice_mode")}'],
   },
   {
     // Auto-mode classifier stage1 (xml_s1) deadline formula (v2.1.251+):
