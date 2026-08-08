@@ -9109,7 +9109,7 @@ export const AST_PATCH_IDS = [
 ];
 
 const anchors = ['external', 'isStandaloneExecutable', 'environmentOverridesParsed',
-  'pixelValidation', 'ultraplan', 'tengu_amber_quartz_disabled', 's date is '];
+  'pixelValidation', 'ultraplan', 'tengu_amber_quartz_disabled', 'allow_voice_mode', 's date is '];
 const gate = id => `globalThis.__clawgodPatches?.[${JSON.stringify(id)}]!==!1`;
 const literal = (node, value) => node?.type === 'Literal' && node.value === value;
 const propertyName = node => node.computed
@@ -9242,11 +9242,17 @@ export function scanAstPatches(code) {
         expr.left.argument.name === 'Bun' && literal(expr.right, 'u');
       if (standalone(value) || (value?.type === 'LogicalExpression' && value.operator === '&&' &&
           typeofBun(value.left) && standalone(value.right))) edit('bun-standalone-executable', value, '!0');
-      if (value?.type === 'UnaryExpression' && value.operator === '!' &&
-          value.argument.type === 'CallExpression' && value.argument.callee.type === 'Identifier' &&
-          value.argument.arguments.length === 2 && literal(value.argument.arguments[0], 'tengu_amber_quartz_disabled') &&
-          boolean(value.argument.arguments[1], false)) {
-        edit('voice-mode', value, `(${gate('voice-mode')}?!0:(${code.slice(value.start, value.end)}))`);
+      const voiceId = 'voice-mode';
+      const voiceDisabled = value?.type === 'UnaryExpression' && value.operator === '!' &&
+        value.argument.type === 'CallExpression' && value.argument.callee.type === 'Identifier' &&
+        value.argument.arguments.length === 2 && literal(value.argument.arguments[0], 'tengu_amber_quartz_disabled') &&
+        boolean(value.argument.arguments[1], false);
+      const voiceAllowed = value?.type === 'CallExpression' && value.callee.type === 'Identifier' &&
+        value.arguments.length === 1 && literal(value.arguments[0], 'allow_voice_mode');
+      if (hasGate(node, voiceId)) results[voiceId].patched = true;
+      else if (voiceDisabled || voiceAllowed) {
+        results[voiceId].present = true;
+        edit(voiceId, value, `(${gate(voiceId)}?!0:(${code.slice(value.start, value.end)}))`);
       }
     }
 
@@ -9797,10 +9803,12 @@ const patches = [
     id: 'growthbook-env-overrides',
     toggleable: true,
     name: 'GrowthBook env overrides',
-    pattern: /function ([\w$]+)\(\)\{if\(!([\w$]+)\)=!0;return ([\w$]+)\}/g,
-    replacer: (m, fn, flag, val) =>
-      `function ${fn}(){if(!${flag}){${flag}=!0;try{let e=${gate('growthbook-env-overrides')}?process.env.CLAUDE_INTERNAL_FC_OVERRIDES:void 0;if(e)${val}=JSON.parse(e)}catch(e){}}return ${val}}`,
+    pattern: /function ([\w$]+)\(\)\{(?:if\(!([\w$]+)\)\2=!0;return ([\w$]+)\}|if\(([\w$]+)\)return ([\w$]+);return \4=!0,\5;(?=let [\w$]+=process\.env\.CLAUDE_INTERNAL_FC_OVERRIDES))/g,
+    replacer: (m, fn, oldFlag, oldVal, flag, val) => oldFlag
+      ? `function ${fn}(){if(!${oldFlag}){${oldFlag}=!0;try{let e=${gate('growthbook-env-overrides')}?process.env.CLAUDE_INTERNAL_FC_OVERRIDES:void 0;if(e)${oldVal}=JSON.parse(e)}catch(e){}}return ${oldVal}}`
+      : `function ${fn}(){if(${flag})return ${val};${flag}=!0;if(!(${gate('growthbook-env-overrides')}))return ${val};`,
     unique: true,  // must match exactly 1
+    sentinel: 'return N0t;return bLa=!0,N0t;let e=process.env.CLAUDE_INTERNAL_FC_OVERRIDES',
   },
   {
     // v2.1.245+ moved env-override parsing into a GrowthBook class method and
@@ -9907,8 +9915,9 @@ const patches = [
     id: 'computer-use-gate',
     toggleable: true,
     name: 'Computer Use gate bypass',
-    pattern: /function ([\w$]+)\(\)\{return [\w$]+\(\)&&[\w$]+\(\)\.enabled\}/g,
-    replacer: (m, fn) => `function ${fn}(){return ${gate('computer-use-gate')}?!0:(${m.slice(`function ${fn}(){return `.length, -1)})}`,
+    pattern: /function ([\w$]+)\(\)\{(?:if\([\w$]+\("hipaa"\)\)return!1;)?return [\w$]+\(\)&&[\w$]+\(\)\.enabled\}/g,
+    replacer: (m, fn) => `function ${fn}(){if(${gate('computer-use-gate')})return!0;` + m.slice(`function ${fn}(){`.length),
+    sentinel: '&&jWs().enabled}',
   },
   {
     id: 'voice-mode',

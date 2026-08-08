@@ -7,7 +7,7 @@ export const AST_PATCH_IDS = [
 ];
 
 const anchors = ['external', 'isStandaloneExecutable', 'environmentOverridesParsed',
-  'pixelValidation', 'ultraplan', 'tengu_amber_quartz_disabled', 's date is '];
+  'pixelValidation', 'ultraplan', 'tengu_amber_quartz_disabled', 'allow_voice_mode', 's date is '];
 const gate = id => `globalThis.__clawgodPatches?.[${JSON.stringify(id)}]!==!1`;
 const literal = (node, value) => node?.type === 'Literal' && node.value === value;
 const propertyName = node => node.computed
@@ -140,11 +140,17 @@ export function scanAstPatches(code) {
         expr.left.argument.name === 'Bun' && literal(expr.right, 'u');
       if (standalone(value) || (value?.type === 'LogicalExpression' && value.operator === '&&' &&
           typeofBun(value.left) && standalone(value.right))) edit('bun-standalone-executable', value, '!0');
-      if (value?.type === 'UnaryExpression' && value.operator === '!' &&
-          value.argument.type === 'CallExpression' && value.argument.callee.type === 'Identifier' &&
-          value.argument.arguments.length === 2 && literal(value.argument.arguments[0], 'tengu_amber_quartz_disabled') &&
-          boolean(value.argument.arguments[1], false)) {
-        edit('voice-mode', value, `(${gate('voice-mode')}?!0:(${code.slice(value.start, value.end)}))`);
+      const voiceId = 'voice-mode';
+      const voiceDisabled = value?.type === 'UnaryExpression' && value.operator === '!' &&
+        value.argument.type === 'CallExpression' && value.argument.callee.type === 'Identifier' &&
+        value.argument.arguments.length === 2 && literal(value.argument.arguments[0], 'tengu_amber_quartz_disabled') &&
+        boolean(value.argument.arguments[1], false);
+      const voiceAllowed = value?.type === 'CallExpression' && value.callee.type === 'Identifier' &&
+        value.arguments.length === 1 && literal(value.arguments[0], 'allow_voice_mode');
+      if (hasGate(node, voiceId)) results[voiceId].patched = true;
+      else if (voiceDisabled || voiceAllowed) {
+        results[voiceId].present = true;
+        edit(voiceId, value, `(${gate(voiceId)}?!0:(${code.slice(value.start, value.end)}))`);
       }
     }
 
