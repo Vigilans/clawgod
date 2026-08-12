@@ -2263,7 +2263,7 @@ const patches = [
       '[\\s\\S]{0,400}?toolUseContext:([\\w$]+),' +
       '[\\s\\S]{0,400}?model:([\\w$]+),' +
       '[\\s\\S]{0,1200}?\\}\\)\\{' +
-      'let ([\\w$]+)=[\\w$]+\\(\\2\\),([\\w$]+)=\\4\\.mode,' +
+      'let (?:[\\w$]+=[\\w$]+\\?\\?\\2\\.session,)?([\\w$]+)=[\\w$]+\\(\\2\\),([\\w$]+)=\\4\\.mode,' +
       '[\\s\\S]{0,300}?([\\w$]+)=[\\w$]+\\(' +
       '[\\s\\S]{0,300}?,\\3,\\5,' +
       '[\\s\\S]{0,10000}?\\{agentType:\\1\\.agentType,(?!model:)',
@@ -2387,9 +2387,10 @@ const patches = [
     id: 'growthbook-config-overrides',
     toggleable: true,
     name: 'GrowthBook config overrides',
-    pattern: /function ([\w$]+)\(\)\{return\}(function)/g,
-    replacer: (m, fn, next) =>
-      `function ${fn}(){return ${gate('growthbook-config-overrides')}?null:void 0}${next}`,
+    pattern: /(?:function ([\w$]+)\(\)\{return\}(function)|(readConfigOverrides)\(\)\{return\}(getAllFeatures)\()/g,
+    replacer: (m, fn, next, method, nextMethod) => fn
+      ? `function ${fn}(){return ${gate('growthbook-config-overrides')}?null:void 0}${next}`
+      : `${method}(){return ${gate('growthbook-config-overrides')}?null:void 0}${nextMethod}(`,
     selectIndex: 0,
     validate: (match, code) => {
       const pos = code.indexOf(match);
