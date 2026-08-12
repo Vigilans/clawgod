@@ -27,3 +27,13 @@ for(const fixture of [
   assert.equal(result.native,enabled?undefined:true);
 }
 console.log('[version-gates.test] legacy and current gate shapes preserve native behavior when disabled');
+
+for(const fixture of [
+  'function read(){return}function next(){};read()',
+  'class GrowthBook{readConfigOverrides(){return}getAllFeatures(){return 1}};new GrowthBook().readConfigOverrides()',
+]) for(const enabled of [false,true]) {
+  assert.equal(runInNewContext(apply('growthbook-config-overrides',fixture),{
+    __clawgodPatches:{'growthbook-config-overrides':enabled},
+  }),enabled?null:undefined);
+}
+console.log('[version-gates.test] GrowthBook function and class overrides ok');
