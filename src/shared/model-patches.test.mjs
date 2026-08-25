@@ -22,7 +22,7 @@ for (const enabled of [false, true]) {
   assert.equal(env.ANTHROPIC_DEFAULT_CUSTOM_MODEL, enabled ? 'custom-provider-model' : undefined);
 }
 
-const aliasSchema = apply('custom-alias-schema', '({model:z.enum(["sonnet","opus","haiku","fable"]).optional().describe(`Pick a model`)})');
+const aliasSchema = apply('custom-alias-schema', '({model:z.enum(["sonnet","opus","haiku","fable"]).optional().describe(`Pick a model`),run_in_background:false})');
 for (const enabled of [false, true]) {
   const result = runInNewContext(aliasSchema, {
     __clawgodPatches: { 'custom-alias-schema': enabled },
@@ -76,3 +76,15 @@ for (const enabled of [false,true]) {
   assert.equal(runInNewContext(writeGate+';put("KNOWN","value")',context),true);
 }
 console.log('[model-patches.test] project alias write gate ok');
+
+const expressionSchema = apply('custom-alias-schema','({model:z(["sonnet","opus","haiku","fable"]).optional().describe(`Pick`+(extra?" extended":"")),run_in_background:false})');
+for (const enabled of [false,true]) {
+  const result=runInNewContext(expressionSchema,{
+    __clawgodPatches:{'custom-alias-schema':enabled},extra:true,
+    process:{env:{ANTHROPIC_DEFAULT_CUSTOM_MODEL:'custom-provider-model'}},
+    z(values){return {optional(){return this;},describe(description){return {values,description};}};},
+  });
+  assert.equal(result.model.description,'Pick extended'+(enabled?' Custom aliases are configured with ANTHROPIC_DEFAULT_<ALIAS>_MODEL.':''));
+  assert.equal(result.model.values.includes('custom'),enabled);
+}
+console.log('[model-patches.test] expression-based Agent model descriptions ok');
