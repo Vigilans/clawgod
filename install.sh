@@ -2029,7 +2029,7 @@ const patches = [
     name: 'Extend Agent model schema with custom aliases',
     pattern: new RegExp(
       'model:([\\w$]+(?:\\.enum)?)\\(\\["sonnet","opus","haiku","fable"\\]\\)' +
-      '\\.optional\\(\\)\\.describe\\(`([^`]+)`\\)',
+      '\\.optional\\(\\)\\.describe\\(([\\s\\S]{1,1000}?)\\)(?=,run_in_background:)',
       'g'
     ),
     replacer: (m, schema, description) => {
@@ -2043,8 +2043,8 @@ const patches = [
         '.filter(function(k){return!["sonnet","opus","haiku","fable"].includes(k)})';
       return (
         `model:(${gate('custom-alias-schema')}?${schema}(["sonnet","opus","haiku","fable",...${aliasScan}])` +
-        `.optional().describe(\`${description} ` +
-        `Custom aliases are configured with ANTHROPIC_DEFAULT_<ALIAS>_MODEL.\`)` +
+        `.optional().describe((${description})+` +
+        `" Custom aliases are configured with ANTHROPIC_DEFAULT_<ALIAS>_MODEL.")` +
         `:${m.slice(6)})`
       );
     },
