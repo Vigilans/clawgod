@@ -140,10 +140,10 @@ jobs:
         # our regex patches no longer matches and a feature is silently broken.
         shell: bash
         run: |
-          line=$(grep -E 'Result: [0-9]+ applied, [0-9]+ skipped, [0-9]+ failed' /tmp/install.log | tail -1 || true)
+          line=$(grep -E 'Result: [0-9]+ applied, [0-9]+ skipped, ([0-9]+ disabled, )?[0-9]+ failed' /tmp/install.log | tail -1 || true)
           echo "Patch summary: ${line:-<not found>}"
           [[ -n "$line" ]] || { echo "::error::patch.mjs result line missing from install.sh output"; exit 1; }
-          failed=$(echo "$line" | sed -E 's/.*skipped, ([0-9]+) failed.*/\1/')
+          failed=$(echo "$line" | sed -E 's/.* ([0-9]+) failed.*/\1/')
           [[ "$failed" -eq 0 ]] || { echo "::error::patch.mjs reported $failed failed patches"; exit 1; }
 
       - name: Verify lean settings applied
