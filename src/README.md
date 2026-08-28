@@ -14,14 +14,11 @@ when either generated installer is missing or differs from its sources.
 
 ## Testing
 
-`src/shared/patch.test.mjs` tests the classifier-timeout helper in
-`runtime-helpers.cjs` and runs the patcher on Ultraplan fixtures for legacy
-bundles and chunk graphs. It checks runtime toggles, metadata preservation,
-and rejection of unsupported shapes without changing neighboring commands.
-No Claude bundle is needed. Run locally with Node:
+The shared tests cover classifier helpers and emitted patches, model gates,
+configuration migration, launchers and artifact caching. Run locally with Node:
 
 ```bash
-node src/shared/patch.test.mjs
+node --test src/shared/*.test.cjs src/shared/*.test.mjs
 ```
 
 `src/shared/bun-ant-shim.test.mjs` tests the `Bun.ant.CellSegmenter`
@@ -83,8 +80,7 @@ timeouts. It is skipped under Node, which cannot run `Bun.serve`. CI runs the
 protocol suite under Node and both suites under Bun on Unix and Windows.
 These fixtures do not certify compatibility with every third-party model.
 
-CI runs the JavaScript suites in the `build-sources` job, then loads the shim under Bun in the
-smoke jobs (`compat-daily.yml`).
+CI runs the shared tests in the `build-sources` job, then loads the shim under Bun in the smoke jobs (`compat-daily.yml`).
 
 `src/ci/tui-smoke.py` tests an installed CLI in a POSIX PTY or Windows ConPTY.
 It uses isolated configuration and a local mock API, types a prompt, and

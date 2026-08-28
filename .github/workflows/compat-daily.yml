@@ -51,36 +51,10 @@ jobs:
         run: node build.js --check
 
       - name: Run patch semantic tests
-        run: node src/shared/patch.test.mjs
-
-      - name: Run clean source and repatch regression tests
-        run: node src/shared/source-backup.test.mjs
+        run: node --test src/shared/*.test.cjs src/shared/*.test.mjs
 
       - name: Test inactive issue policy
         run: node .github/scripts/close-inactive-issues.test.cjs
-
-      - name: Run terminal reply regression tests
-        run: node src/shared/terminal-reply.test.mjs
-
-      - name: Run Lean mode regression tests
-        run: node src/shared/lean.test.mjs
-
-      - name: Run updater environment regression tests
-        run: node src/shared/updater.test.mjs
-
-      - name: Run bounded startup verification regression tests
-        run: node src/shared/startup-check.test.mjs
-
-      - name: Run provider auth and proxy effort regression tests
-        run: node src/shared/provider.test.mjs
-
-      - name: Run Chat Completions protocol regression tests
-        run: node --test src/shared/openai-proxy.test.mjs
-
-      - name: Run Bun.ant shim tests
-        # Claude Code >= 2.1.271 renders through Bun.ant.CellSegmenter, which
-        # stock Bun lacks; the shim answers it. Pure JS, so it runs on Node.
-        run: node src/shared/bun-ant-shim.test.mjs
 
       - name: Check embedded JavaScript syntax
         shell: bash
@@ -329,27 +303,30 @@ jobs:
           fi
           echo "Lean toggle verified"
 
-      - name: Smoke test — claude --version
+      - name: Smoke test — claude startup
         timeout-minutes: 1
         # Exercises the wrapper path:
         #   launcher → bun cli.cjs → require('./cli.original.cjs')
-        # The Bun CJS-wrapper panic surfaces here, not at install time.
+        # --help loads startup modules that --version can bypass, catching both
+        # Bun CJS-wrapper panics and missing extracted runtime assets.
         shell: bash
         run: |
-          set +e
-          out=$(claude --version 2>&1)
-          rc=$?
-          set -e
-          echo "$out"
-          if echo "$out" | grep -q "Expected CommonJS module to have a function wrapper"; then
-            echo "::error::Bun CJS-wrapper panic — local Bun lags the embedded Bun"
-            exit 1
-          fi
-          [[ $rc -eq 0 ]] || { echo "::error::claude --version exited $rc"; exit 1; }
-          if echo "$out" | grep -qi 'proxy on port'; then
-            echo '::error::version query started a provider listener'
-            exit 1
-          fi
+          for arg in --version --help; do
+            set +e
+            out=$(claude "$arg" 2>&1)
+            rc=$?
+            set -e
+            echo "$out"
+            if echo "$out" | grep -q "Expected CommonJS module to have a function wrapper"; then
+              echo "::error::Bun CJS-wrapper panic — local Bun lags the embedded Bun"
+              exit 1
+            fi
+            [[ $rc -eq 0 ]] || { echo "::error::claude $arg exited $rc"; exit 1; }
+            if [[ "$arg" == "--version" ]] && echo "$out" | grep -qi 'proxy on port'; then
+              echo '::error::version query started a provider listener'
+              exit 1
+            fi
+          done
 
       - name: Functional checks — runtime invariants
         # Verify that clawgod's monkey-patches produce correct runtime state.
@@ -722,7 +699,7 @@ jobs:
           node src/ci/provider-startup-fixture.cjs verify (Join-Path $env:RUNNER_TEMP 'install-windows.log')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Smoke test - clawgod --version
+      - name: Smoke test - clawgod startup
         timeout-minutes: 1
         # Use the unambiguous clawgod.cmd entry point. This exercises the full
         # launcher -> Bun -> cli.cjs -> chunk-graph path on Windows.
@@ -739,16 +716,18 @@ jobs:
           $previousErrorAction = $ErrorActionPreference
           try {
             $ErrorActionPreference = 'Continue'
-            $output = & $launcher --version 2>&1 | Out-String
-            $exitCode = $LASTEXITCODE
+            foreach ($arg in @('--version', '--help')) {
+              $output = & $launcher $arg 2>&1 | Out-String
+              $exitCode = $LASTEXITCODE
+              Write-Host $output
+              if ($exitCode -ne 0) {
+                throw "clawgod $arg exited $exitCode"
+              }
+              if ($arg -eq '--version' -and $output -match 'proxy on port') { throw 'Version query started a provider listener' }
+            }
           } finally {
             $ErrorActionPreference = $previousErrorAction
           }
-          Write-Host $output
-          if ($exitCode -ne 0) {
-            Write-Error "clawgod --version exited $exitCode"
-          }
-          if ($output -match 'proxy on port') { throw 'Version query started a provider listener' }
 
       - name: Interactive renderer regression (Windows ConPTY)
         # --version does not paint a frame. Run the installed cli.cjs in a
