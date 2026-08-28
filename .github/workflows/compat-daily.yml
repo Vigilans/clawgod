@@ -191,22 +191,25 @@ jobs:
           fi
           echo "Lean toggle verified"
 
-      - name: Smoke test — claude --version
+      - name: Smoke test — claude startup
         # Exercises the wrapper path:
         #   launcher → bun cli.cjs → require('./cli.original.cjs')
-        # The Bun CJS-wrapper panic surfaces here, not at install time.
+        # --help loads startup modules that --version can bypass, catching both
+        # Bun CJS-wrapper panics and missing extracted runtime assets.
         shell: bash
         run: |
-          set +e
-          out=$(claude --version 2>&1)
-          rc=$?
-          set -e
-          echo "$out"
-          if echo "$out" | grep -q "Expected CommonJS module to have a function wrapper"; then
-            echo "::error::Bun CJS-wrapper panic — local Bun lags the embedded Bun"
-            exit 1
-          fi
-          [[ $rc -eq 0 ]] || { echo "::error::claude --version exited $rc"; exit 1; }
+          for arg in --version --help; do
+            set +e
+            out=$(claude "$arg" 2>&1)
+            rc=$?
+            set -e
+            echo "$out"
+            if echo "$out" | grep -q "Expected CommonJS module to have a function wrapper"; then
+              echo "::error::Bun CJS-wrapper panic — local Bun lags the embedded Bun"
+              exit 1
+            fi
+            [[ $rc -eq 0 ]] || { echo "::error::claude $arg exited $rc"; exit 1; }
+          done
 
       - name: Functional checks — runtime invariants
         # Verify that clawgod's monkey-patches produce correct runtime state.
