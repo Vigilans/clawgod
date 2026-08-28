@@ -14,15 +14,14 @@ when either generated installer is missing or differs from its sources.
 
 ## Testing
 
-`src/shared/patch.test.mjs` holds unit tests for the classifier-timeout
-helper in `runtime-helpers.cjs` (a pure function, so no Claude bundle
-needed). Run locally with Node:
+The shared tests cover classifier helpers and emitted patches, model gates,
+configuration migration, launchers and artifact caching. Run locally with Node:
 
 ```bash
-node src/shared/patch.test.mjs
+node --test src/shared/*.test.cjs src/shared/*.test.mjs
 ```
 
-CI runs it in the `build-sources` job (`compat-daily.yml`).
+CI runs these tests in the `build-sources` job (`compat-daily.yml`).
 
 ## Layout
 

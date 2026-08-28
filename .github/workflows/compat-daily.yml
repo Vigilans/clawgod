@@ -47,7 +47,7 @@ jobs:
         run: node build.js --check
 
       - name: Run patch semantic tests
-        run: node src/shared/patch.test.mjs
+        run: node --test src/shared/*.test.cjs src/shared/*.test.mjs
 
       - name: Check embedded JavaScript syntax
         shell: bash
@@ -221,22 +221,25 @@ jobs:
           fi
           echo "Lean toggle verified"
 
-      - name: Smoke test — claude --version
+      - name: Smoke test — claude startup
         # Exercises the wrapper path:
         #   launcher → bun cli.cjs → require('./cli.original.cjs')
-        # The Bun CJS-wrapper panic surfaces here, not at install time.
+        # --help loads startup modules that --version can bypass, catching both
+        # Bun CJS-wrapper panics and missing extracted runtime assets.
         shell: bash
         run: |
-          set +e
-          out=$(claude --version 2>&1)
-          rc=$?
-          set -e
-          echo "$out"
-          if echo "$out" | grep -q "Expected CommonJS module to have a function wrapper"; then
-            echo "::error::Bun CJS-wrapper panic — local Bun lags the embedded Bun"
-            exit 1
-          fi
-          [[ $rc -eq 0 ]] || { echo "::error::claude --version exited $rc"; exit 1; }
+          for arg in --version --help; do
+            set +e
+            out=$(claude "$arg" 2>&1)
+            rc=$?
+            set -e
+            echo "$out"
+            if echo "$out" | grep -q "Expected CommonJS module to have a function wrapper"; then
+              echo "::error::Bun CJS-wrapper panic — local Bun lags the embedded Bun"
+              exit 1
+            fi
+            [[ $rc -eq 0 ]] || { echo "::error::claude $arg exited $rc"; exit 1; }
+          done
 
       - name: Functional checks — runtime invariants
         # Verify that clawgod's monkey-patches produce correct runtime state.
@@ -485,7 +488,7 @@ jobs:
             Write-Error "patch.mjs reported failed patches: $($summary.Line)"
           }
 
-      - name: Smoke test - clawgod --version
+      - name: Smoke test - clawgod startup
         # Use the unambiguous clawgod.cmd entry point. This exercises the full
         # launcher -> Bun -> cli.cjs -> chunk-graph path on Windows.
         shell: powershell
@@ -501,14 +504,16 @@ jobs:
           $previousErrorAction = $ErrorActionPreference
           try {
             $ErrorActionPreference = 'Continue'
-            $output = & $launcher --version 2>&1 | Out-String
-            $exitCode = $LASTEXITCODE
+            foreach ($arg in @('--version', '--help')) {
+              $output = & $launcher $arg 2>&1 | Out-String
+              $exitCode = $LASTEXITCODE
+              Write-Host $output
+              if ($exitCode -ne 0) {
+                throw "clawgod $arg exited $exitCode"
+              }
+            }
           } finally {
             $ErrorActionPreference = $previousErrorAction
-          }
-          Write-Host $output
-          if ($exitCode -ne 0) {
-            Write-Error "clawgod --version exited $exitCode"
           }
 
       - name: Open or update issue on scheduled failure
