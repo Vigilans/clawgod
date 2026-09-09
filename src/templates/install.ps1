@@ -946,7 +946,8 @@ Write-Dim "    claude update --no-upgrade        (re-patch the installed version
 Write-Dim "    claude update --tolerate-stale    (continue past stale patches; affected gates stay upstream)"
 }
 Write-Dim "  To leave clawgod and use vanilla update:"
-Write-Dim "    bash ~/.clawgod/install.sh --uninstall"
+$uninstallDir = $ClawDir.Replace("'", "''")
+Write-Dim "    `$env:CLAWGOD_DIR='$uninstallDir'; & ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/Vigilans/clawgod/dev/install.ps1'))) -Uninstall"
 Write-Host ""
 Write-Err "  If 'claude' still runs the old version, restart your terminal."
 Write-Host ""
