@@ -5,6 +5,7 @@ const { homedir } = require('os');
 const { spawnSync } = require('child_process');
 
 const clawgodDir = join(homedir(), '.clawgod');
+const featureEnabled = require('./feature-gates.cjs').isEnabled;
 // Version queries (including installer verification) must not start provider
 // servers or background update requests that keep the process alive (#203).
 // Match only a standalone flag, never a prompt/subcommand containing it.
@@ -41,76 +42,86 @@ const defaultConfig = {
 };
 
 let config = { ...defaultConfig };
-if (!versionOnly && existsSync(configFile)) {
-  try {
-    const raw = JSON.parse(readFileSync(configFile, 'utf8'));
-    config = { ...defaultConfig, ...raw };
-  } catch {}
-} else if (!versionOnly) {
-  mkdirSync(providerDir, { recursive: true });
-  writeFileSync(configFile, JSON.stringify(defaultConfig, null, 2) + '\n');
-}
-
-// Explicit protocol takes precedence over legacy provider types.
-if (config.protocol !== undefined && !['anthropic', 'openai-chat'].includes(config.protocol)) {
-  throw new Error('[clawgod] Unsupported provider protocol: ' + config.protocol + '. Use anthropic or openai-chat; auto and Responses are not supported.');
-}
-const _useProxy = config.protocol === 'openai-chat' ||
-  (config.protocol === undefined && ['grok', 'openai-compat'].includes(config.type));
-if (_useProxy) {
-  let _proxyKey = config.apiKey || '';
-  if (!_proxyKey && config.type === 'grok') {
+if (!versionOnly && featureEnabled('provider-config')) {
+  if (existsSync(configFile)) {
     try {
-      const _gs = JSON.parse(readFileSync(join(homedir(), '.grok', 'user-settings.json'), 'utf8'));
-      _proxyKey = _gs.apiKey || '';
+      const raw = JSON.parse(readFileSync(configFile, 'utf8'));
+      config = { ...defaultConfig, ...raw };
     } catch {}
-    if (!_proxyKey) _proxyKey = process.env.GROK_API_KEY || '';
+  } else {
+    mkdirSync(providerDir, { recursive: true });
+    writeFileSync(configFile, JSON.stringify(defaultConfig, null, 2) + '\n');
   }
-  // The generic Anthropic default must never become a Chat Completions URL.
-  if (config.baseURL === defaultConfig.baseURL || !config.baseURL) {
-    if (config.type === 'grok') config.baseURL = 'https://api.x.ai/v1';
-    else throw new Error('[clawgod] openai-chat requires an explicit baseURL, for example https://example.com/v1');
+
+  // Explicit protocol takes precedence over legacy provider types.
+  if (config.protocol !== undefined && !['anthropic', 'openai-chat'].includes(config.protocol)) {
+    throw new Error('[clawgod] Unsupported provider protocol: ' + config.protocol + '. Use anthropic or openai-chat; auto and Responses are not supported.');
   }
-  if (_proxyKey) {
-    const { startProxy } = require('./openai-proxy.cjs');
-    const _proxy = startProxy({
-      apiKey: _proxyKey,
-      baseURL: config.baseURL || (config.type === 'grok' ? 'https://api.x.ai/v1' : ''),
-      model: config.model || '',
-      effort: process.env.CLAUDE_CODE_EFFORT_LEVEL ?? config.effort,
-      timeoutMs: process.env.API_TIMEOUT_MS ?? config.timeoutMs,
-    });
-    delete process.env.ANTHROPIC_API_KEY;
-    process.env.ANTHROPIC_BASE_URL = 'http://127.0.0.1:' + _proxy.port;
-    process.env.ANTHROPIC_AUTH_TOKEN = 'proxy-passthrough';
+  const _useProxy = config.protocol === 'openai-chat' ||
+    (config.protocol === undefined && ['grok', 'openai-compat'].includes(config.type));
+  if (_useProxy) {
+    let _proxyKey = config.apiKey || '';
+    if (!_proxyKey && config.type === 'grok') {
+      try {
+        const _gs = JSON.parse(readFileSync(join(homedir(), '.grok', 'user-settings.json'), 'utf8'));
+        _proxyKey = _gs.apiKey || '';
+      } catch {}
+      if (!_proxyKey) _proxyKey = process.env.GROK_API_KEY || '';
+    }
+    // The generic Anthropic default must never become a Chat Completions URL.
+    if (config.baseURL === defaultConfig.baseURL || !config.baseURL) {
+      if (config.type === 'grok') config.baseURL = 'https://api.x.ai/v1';
+      else throw new Error('[clawgod] openai-chat requires an explicit baseURL, for example https://example.com/v1');
+    }
+    if (_proxyKey) {
+      const { startProxy } = require('./openai-proxy.cjs');
+      const _proxy = startProxy({
+        apiKey: _proxyKey,
+        baseURL: config.baseURL || (config.type === 'grok' ? 'https://api.x.ai/v1' : ''),
+        model: config.model || '',
+        effort: process.env.CLAUDE_CODE_EFFORT_LEVEL ?? config.effort,
+        timeoutMs: process.env.API_TIMEOUT_MS ?? config.timeoutMs,
+      });
+      delete process.env.ANTHROPIC_API_KEY;
+      process.env.ANTHROPIC_BASE_URL = 'http://127.0.0.1:' + _proxy.port;
+      process.env.ANTHROPIC_AUTH_TOKEN = 'proxy-passthrough';
+      if (config.model) process.env.ANTHROPIC_MODEL = config.model;
+      if (config.smallModel) process.env.ANTHROPIC_SMALL_FAST_MODEL = config.smallModel;
+      process.env.CLAUDE_CODE_ATTRIBUTION_HEADER = '0';
+      process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS ??= '1';
+      process.on('exit', function () { try { _proxy.stop(); } catch {} });
+      process.stderr.write('[clawgod] OpenAI Chat Completions proxy on port ' + _proxy.port + '\n');
+      config = { ...config, apiKey: '', baseURL: '', model: '', smallModel: '' };  // prevent fallthrough to apiKey/baseURL injection below
+    } else {
+      throw new Error('[clawgod] openai-chat requires an API key (grok also accepts GROK_API_KEY or ~/.grok/user-settings.json)');
+    }
+  }
+
+  const hasProviderApiKey = !!config.apiKey;
+
+  if (hasProviderApiKey) {
+    if (config.baseURL) process.env.ANTHROPIC_BASE_URL = config.baseURL;
     if (config.model) process.env.ANTHROPIC_MODEL = config.model;
     if (config.smallModel) process.env.ANTHROPIC_SMALL_FAST_MODEL = config.smallModel;
-    process.env.CLAUDE_CODE_ATTRIBUTION_HEADER = '0';
-    process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS ??= '1';
-    process.on('exit', function () { try { _proxy.stop(); } catch {} });
-    process.stderr.write('[clawgod] OpenAI Chat Completions proxy on port ' + _proxy.port + '\n');
-    config = { ...config, apiKey: '', baseURL: '', model: '', smallModel: '' };  // prevent fallthrough to apiKey/baseURL injection below
-  } else {
-    throw new Error('[clawgod] openai-chat requires an API key (grok also accepts GROK_API_KEY or ~/.grok/user-settings.json)');
+    if (config.baseURL && !/anthropic\.com/i.test(config.baseURL)) {
+      delete process.env.ANTHROPIC_API_KEY;
+      const existingToken = (process.env.ANTHROPIC_AUTH_TOKEN || '').trim();
+      process.env.ANTHROPIC_AUTH_TOKEN = existingToken || config.apiKey;
+    } else {
+      delete process.env.ANTHROPIC_AUTH_TOKEN;
+      process.env.ANTHROPIC_API_KEY = config.apiKey;
+    }
+  } else if (config.baseURL && config.baseURL !== defaultConfig.baseURL) {
+    process.env.ANTHROPIC_BASE_URL ??= config.baseURL;
   }
-}
 
-const hasProviderApiKey = !!config.apiKey;
-
-if (hasProviderApiKey) {
-  if (config.baseURL) process.env.ANTHROPIC_BASE_URL = config.baseURL;
-  if (config.model) process.env.ANTHROPIC_MODEL = config.model;
-  if (config.smallModel) process.env.ANTHROPIC_SMALL_FAST_MODEL = config.smallModel;
-  if (config.baseURL && !/anthropic\.com/i.test(config.baseURL)) {
-    delete process.env.ANTHROPIC_API_KEY;
-    const existingToken = (process.env.ANTHROPIC_AUTH_TOKEN || '').trim();
-    process.env.ANTHROPIC_AUTH_TOKEN = existingToken || config.apiKey;
-  } else {
-    delete process.env.ANTHROPIC_AUTH_TOKEN;
-    process.env.ANTHROPIC_API_KEY = config.apiKey;
+  if (config.effort) {
+    process.env.CLAUDE_CODE_EFFORT_LEVEL ??= config.effort;
   }
-} else if (config.baseURL && config.baseURL !== defaultConfig.baseURL) {
-  process.env.ANTHROPIC_BASE_URL ??= config.baseURL;
+
+  if (config.timeoutMs) {
+    process.env.API_TIMEOUT_MS ??= String(config.timeoutMs);
+  }
 }
 
 // Third-party Anthropic-compatible proxies (DeepSeek / OneAPI / Bedrock /
@@ -121,21 +132,14 @@ if (hasProviderApiKey) {
 // so the cached prefix changes every request and cache hit rate drops to
 // zero. Auto-disable the header whenever baseURL points away from Anthropic.
 // Users can force re-enable with CLAUDE_CODE_ATTRIBUTION_HEADER=1 if needed.
-if (config.baseURL && !/anthropic\.com/i.test(config.baseURL)) {
+if (featureEnabled('remove-attribution-header') && config.baseURL && !/anthropic\.com/i.test(config.baseURL)) {
   process.env.CLAUDE_CODE_ATTRIBUTION_HEADER ??= '0';
 }
 
-if (config.effort) {
-  process.env.CLAUDE_CODE_EFFORT_LEVEL ??= config.effort;
-}
-
-if (config.timeoutMs) {
-  process.env.API_TIMEOUT_MS ??= String(config.timeoutMs);
-}
 // Remote Control needs GrowthBook evaluation. Restrict network traffic by
 // default only in max mode; on/off retain upstream eligibility checks.
 // Explicit user environment settings still take precedence.
-if (existsSync(join(clawgodDir, '.lean-max')) && !existsSync(join(clawgodDir, '.lean-disabled'))) {
+if (featureEnabled('lean-settings') && existsSync(join(clawgodDir, '.lean-max')) && !existsSync(join(clawgodDir, '.lean-disabled'))) {
   process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC ??= '1';
 }
 process.env.DISABLE_INSTALLATION_CHECKS ??= '1';
@@ -148,7 +152,7 @@ process.env.DISABLE_AUTOUPDATER = '1';
 process.env.USE_BUILTIN_RIPGREP ??= '1';
 
 const featuresFile = join(providerDir, 'features.json');
-if (!process.env.CLAUDE_INTERNAL_FC_OVERRIDES && existsSync(featuresFile)) {
+if (featureEnabled('features-config') && !process.env.CLAUDE_INTERNAL_FC_OVERRIDES && existsSync(featuresFile)) {
   try {
     const raw = readFileSync(featuresFile, 'utf8');
     JSON.parse(raw);
@@ -171,7 +175,7 @@ if (_realExecPath !== process.execPath) {
 }
 
 // Lean mode toggle — --lean-off / --lean-on / --lean-max
-if (process.argv.includes('--lean-off') || process.argv.includes('--lean-on') || process.argv.includes('--lean-max')) {
+if (featureEnabled('lean-settings') && (process.argv.includes('--lean-off') || process.argv.includes('--lean-on') || process.argv.includes('--lean-max'))) {
   const _leanOff = join(clawgodDir, '.lean-disabled');
   const _leanMax = join(clawgodDir, '.lean-max');
   const _leanSettings = join(homedir(), '.claude', 'settings.json');
@@ -224,7 +228,7 @@ if (process.argv.includes('--lean-off') || process.argv.includes('--lean-on') ||
 }
 
 // Update check — cached, non-blocking, 24h interval
-try {
+if (featureEnabled('update-notification')) try {
   const _ucFile = join(clawgodDir, '.update-check');
   const _verFile = join(clawgodDir, '.clawgod-version');
   if (!versionOnly && existsSync(_verFile)) {
@@ -246,11 +250,6 @@ try {
     }
   }
 } catch {}
-
-// Patch feature gates (~/.clawgod/patches.json + CLAWGOD_FEATURE_* env) —
-// must run before the patched cli loads so gated patches see
-// globalThis.__clawgodPatches.
-require('./feature-gates.cjs');
 
 // Runtime helpers shared by injected patches (globalThis.__clawgodHelpers,
 // see runtime-helpers.cjs). cli.original.cjs is a separate module scope, so

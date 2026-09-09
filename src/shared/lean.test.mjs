@@ -42,7 +42,8 @@ function launch(args = [], env = {}) {
       require(name) {
         if (name === 'os') return { homedir: () => home };
         if (name === './cli.original.cjs') { loaded = true; return {}; }
-        if (['./feature-gates.cjs', './runtime-helpers.cjs', './bun-ant-shim.cjs'].includes(name)) return {};
+        if (name === './feature-gates.cjs') return { isEnabled: id => env['CLAWGOD_FEATURE_' + id.toUpperCase().replaceAll('-', '_')] !== 'false' };
+        if (['./runtime-helpers.cjs', './bun-ant-shim.cjs'].includes(name)) return {};
         return require(name);
       },
     });
@@ -114,6 +115,7 @@ try {
     saveSettings({ ...loadSettings(), disableRemoteControl: false });
     launch(['--lean-max']);
     assert.equal(loadSettings().disableRemoteControl, false);
+    assert.equal(launch([], { CLAWGOD_FEATURE_LEAN_SETTINGS: 'false' })[trafficKey], undefined);
   }
   console.log('[lean.test] launcher modes, provider parity, and explicit environment settings ok');
 } finally {

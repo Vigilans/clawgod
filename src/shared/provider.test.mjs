@@ -50,7 +50,8 @@ function launch(config = {}, env = {}) {
       if (name === 'os') return { homedir: () => home };
       if (name === './openai-proxy.cjs') return proxyModule.exports;
       if (name === './cli.original.cjs') { loaded = true; return {}; }
-      if (['./feature-gates.cjs', './runtime-helpers.cjs', './bun-ant-shim.cjs'].includes(name)) return {};
+      if (name === './feature-gates.cjs') return { isEnabled: id => env['CLAWGOD_FEATURE_' + id.toUpperCase().replaceAll('-', '_')] !== 'false' };
+      if (['./runtime-helpers.cjs', './bun-ant-shim.cjs'].includes(name)) return {};
       return require(name);
     },
   });
@@ -137,6 +138,8 @@ try {
   }
   assert.throws(() => launch({ protocol: 'openai-chat', apiKey: 'test' }), /explicit baseURL/);
   assert.throws(() => launch({ protocol: 'openai-chat', baseURL: 'https://upstream.invalid/v1' }), /requires an API key/);
+  const disabled = launch({ protocol: 'openai-chat', effort: 'high', timeoutMs: 4321 }, { CLAWGOD_FEATURE_PROVIDER_CONFIG: 'false' });
+  for (const key of ['ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_EFFORT_LEVEL', 'API_TIMEOUT_MS']) assert.equal(disabled.env[key], undefined);
   console.log('[provider.test] proxy auth, effort translation/fallback/precedence, streaming, and defaults ok');
 } finally {
   fs.rmSync(home, { recursive: true, force: true });

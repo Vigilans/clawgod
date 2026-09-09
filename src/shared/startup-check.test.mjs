@@ -120,7 +120,7 @@ try {
         require(name) {
           if (name === 'os') return { homedir: () => profile };
           if (name === './openai-proxy.cjs') throw new Error('version must not start a provider');
-          if (['./feature-gates.cjs', './runtime-helpers.cjs', './bun-ant-shim.cjs'].includes(name)) { modules.push(name); return {}; }
+          if (['./feature-gates.cjs', './runtime-helpers.cjs', './bun-ant-shim.cjs'].includes(name)) { modules.push(name); return { isEnabled: () => true }; }
           if (name === './cli.original.cjs') { loaded = true; return {}; }
           return require(name);
         },
@@ -138,7 +138,10 @@ try {
   for (const args of [['update', '--version', '2.1.285'], ['-p', '--version']]) {
     assert.throws(() => runInNewContext(wrapper, {
       process: { argv: ['bun', cli, ...args], env: {} },
-      require(name) { return name === 'os' ? { homedir: () => profile } : require(name); },
+      require(name) {
+        if (name === './feature-gates.cjs') return { isEnabled: () => true };
+        return name === 'os' ? { homedir: () => profile } : require(name);
+      },
     }), /Unsupported provider protocol/);
   }
   console.log('[startup-check.test] standalone version skips provider/update side effects and still loads runtime helpers/bundle');
@@ -151,6 +154,7 @@ try {
     fs.writeFileSync(cli, wrapper);
     fs.copyFileSync(join(sourceDir, 'openai-proxy.cjs'), join(dir, 'openai-proxy.cjs'));
     for (const name of ['feature-gates.cjs', 'runtime-helpers.cjs', 'bun-ant-shim.cjs']) fs.writeFileSync(join(dir, name), '');
+    fs.writeFileSync(join(dir, 'feature-gates.cjs'), 'exports.isEnabled = () => true;');
     fs.writeFileSync(join(dir, 'cli.original.cjs'), `console.log(${JSON.stringify(version)});`);
     fs.writeFileSync(config, JSON.stringify({ protocol: 'openai-chat', apiKey: 'fixture', baseURL: 'https://example.invalid/v1' }));
     const entry = join(dir, 'entry.cjs');

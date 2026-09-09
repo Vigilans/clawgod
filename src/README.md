@@ -146,6 +146,9 @@ install.
   `bun-ant-shim.cjs` re-implements the `Bun.ant.CellSegmenter` API that Claude
   Code 2.1.271+ renders through, since stock Bun has no `Bun.ant` namespace;
   `cli.cjs` loads it before `cli.original.cjs`.
+  Registry entries use `patchIds` for source patches and optional `runtimeIds`
+  for wrapper/installer actions. Installers query the generated gate module
+  with `--enabled <feature>`; both platforms share its configuration rules.
 - `windows/` contains genuinely platform-specific payloads (the PowerShell
   build applies `escapeNonAscii` per file in build.js).
 - `templates/` contain the shell around those payloads and use
