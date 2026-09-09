@@ -13,14 +13,67 @@
 // {{CLAWGOD:FEATURES_META}}
 
 var clawgodDir = __dirname;
+var configFile = require('path').join(clawgodDir, 'patches.json');
+var configText;
 
 var _cfg = {};
 try {
-  _cfg = JSON.parse(require('fs').readFileSync(require('path').join(clawgodDir, 'patches.json'), 'utf8').replace(/^\uFEFF/, ''));
+  configText = require('fs').readFileSync(configFile, 'utf8');
+  _cfg = JSON.parse(configText.replace(/^\uFEFF/, ''));
 } catch (error) {
   if (error.code !== 'ENOENT') throw error;
 }
 if (!_cfg || typeof _cfg !== 'object' || Array.isArray(_cfg)) throw new Error('patches.json must contain a feature object');
+if (require.main === module && ['--check', '--enabled', '--migrate'].includes(process.argv[2]) && Object.hasOwn(_cfg, 'enabled')) {
+  var legacy = {
+    'clawgod.features-config': ['features-config'],
+    'clawgod.green-theme': ['theme'],
+    'clawgod.lean-settings': ['lean-settings'],
+    'clawgod.provider-config': ['provider-config'],
+    'clawgod.update-command-redirect': ['update-command-redirect'],
+    'clawgod.update-notification': ['update-notification'],
+    'features.agent-teams': ['agent-teams'],
+    'features.anthropic-user-type': ['anthropic-user-type', 'message-filter'],
+    'features.auto-mode': ['auto-mode'],
+    'features.computer-use': ['computer-use'],
+    'features.custom-model-aliases': ['custom-model-aliases'],
+    'features.hide-login-notice': ['not-logged-in'],
+    'features.ultraplan': ['ultraplan'],
+    'features.ultrareview': ['ultrareview'],
+    'features.voice-mode': ['voice-mode'],
+    'fixes.hook-update-agent-model': ['hook-update-agent-model'],
+    'fixes.macos-image-paste': ['macos-image-paste'],
+    'fixes.send-message-resume-model': ['send-message-resume-model'],
+    'system-prompt.remove-attribution-header': ['remove-attribution-header'],
+    'system-prompt.remove-cautious-actions': ['cautious-actions'],
+    'system-prompt.remove-cyber-risk-instruction': ['cyber-risk'],
+    'system-prompt.remove-geo-steganography': ['geo-neutralize'],
+    'system-prompt.remove-url-generation-restriction': ['url-restriction'],
+  };
+  if (!Array.isArray(_cfg.enabled) || _cfg.enabled.some(function (id) { return typeof id !== 'string'; })) {
+    throw new Error('Legacy patches.json must contain an enabled string array');
+  }
+  var unknown = _cfg.enabled.filter(function (id) { return !Object.hasOwn(legacy, id); });
+  var extra = Object.keys(_cfg).filter(function (key) { return key !== 'enabled'; });
+  if (unknown.length || extra.length) throw new Error('Cannot migrate unknown capabilities or fields: ' + unknown.concat(extra).join(', '));
+  var selected = new Set(_cfg.enabled);
+  var converted = {};
+  for (var oldId in legacy) {
+    for (var feature of legacy[oldId]) converted[feature] = selected.has(oldId);
+  }
+  if (process.argv[2] === '--migrate') {
+    var fs = require('fs');
+    var suffix = Date.now() + '-' + process.pid;
+    var backup = configFile + '.legacy-' + suffix + '.bak';
+    var temporary = configFile + '.tmp-' + suffix;
+    fs.writeFileSync(backup, configText, {flag:'wx', mode:0o600});
+    fs.writeFileSync(temporary, JSON.stringify(converted, null, 2) + '\n', {flag:'wx', mode:0o600});
+    try { fs.renameSync(temporary, configFile); }
+    catch (error) { fs.unlinkSync(temporary); throw error; }
+    process.stdout.write('[clawgod] Migrated legacy capabilities; backup: ' + backup + '\n');
+  }
+  _cfg = converted;
+}
 if (Object.hasOwn(_cfg, 'enabled')) throw new Error('Legacy patches.json: rerun the ClawGod installer to migrate capability settings');
 for (var _name in process.env) {
   if (_name.indexOf('CLAWGOD_FEATURE_') !== 0) continue;

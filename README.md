@@ -122,6 +122,8 @@ claude.orig         # Original unpatched version (auto-backed-up)
 
 `~/.clawgod/patches.json` (auto-created empty) switches features off persistently — your choices survive updates and reinstalls. Absent key = on.
 
+The installer converts an existing `{"enabled":[...]}` capability allowlist to feature booleans when installing the new wrapper. It validates before downloading and keeps an exact `patches.json.legacy-*.bak` backup. Unknown legacy capabilities stop migration without changing the configuration. Runtime launches require the feature-object format.
+
 ```json
 { "theme": false, "geo-neutralize": false }
 ```

@@ -61,3 +61,41 @@ for (const platform of ['linux','win32']) {
   assert.ok(loaded.endsWith('cli.original.cjs'));
 }
 console.log('[feature-gates.test] config precedence and disabled wrapper actions ok');
+
+const {mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync} = fs;
+const {tmpdir} = require('node:os');
+const {spawnSync} = require('node:child_process');
+const directory = mkdtempSync(path.join(tmpdir(), 'clawgod-migration-test-'));
+try {
+  const helper = path.join(directory,'feature-gates.cjs');
+  const config = path.join(directory,'patches.json');
+  writeFileSync(helper,source);
+  const run = (...args) => spawnSync(process.execPath,[helper,...(args.length?args:['--migrate'])],{encoding:'utf8',env:{}});
+  const original = '\ufeff{ "enabled": ["features.anthropic-user-type", "features.custom-model-aliases"] }\n';
+  writeFileSync(config,original);
+  assert.equal(run('--check').status,0);
+  assert.equal(run('--enabled','custom-model-aliases').stdout,'1\n');
+  assert.equal(readFileSync(config,'utf8'),original);
+  assert.equal(readdirSync(directory).filter(name=>name.includes('.legacy-')).length,0);
+  assert.equal(run().status,0);
+  const converted = JSON.parse(readFileSync(config,'utf8'));
+  assert.equal(converted['anthropic-user-type'],true);
+  assert.equal(converted['message-filter'],true);
+  assert.equal(converted['custom-model-aliases'],true);
+  assert.equal(converted.theme,false);
+  assert.equal(converted['provider-config'],false);
+  assert.equal(converted['classifier-tuning'],undefined);
+  const backup = readdirSync(directory).find(name=>name.includes('.legacy-'));
+  assert.equal(readFileSync(path.join(directory,backup),'utf8'),original);
+  const once = readFileSync(config,'utf8');
+  assert.equal(run().status,0);
+  assert.equal(readFileSync(config,'utf8'),once);
+  assert.equal(readdirSync(directory).filter(name=>name.includes('.legacy-')).length,1);
+  writeFileSync(config,'{"enabled":["unknown-capability"]}');
+  assert.notEqual(run().status,0);
+  assert.equal(readFileSync(config,'utf8'),'{"enabled":["unknown-capability"]}');
+  writeFileSync(config,'{"enabled":[]}');
+  assert.equal(run().status,0);
+  assert.ok(Object.values(JSON.parse(readFileSync(config,'utf8'))).every(value=>value === false));
+} finally { rmSync(directory,{recursive:true,force:true}); }
+console.log('[feature-gates.test] legacy migration, backup and repeat install ok');

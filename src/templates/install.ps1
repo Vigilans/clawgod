@@ -224,7 +224,7 @@ New-Item -ItemType Directory -Force -Path $ClawDir | Out-Null
 '@ | Set-Content (Join-Path $ClawDir "feature-gates.cjs") -Encoding UTF8
 Write-OK "Patch feature gates created (feature-gates.cjs)"
 
-& node (Join-Path $ClawDir "feature-gates.cjs")
+& node (Join-Path $ClawDir "feature-gates.cjs") --check
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 function Test-FeatureEnabled([string]$Name) {
     $value = & node (Join-Path $ClawDir "feature-gates.cjs") --enabled $Name
@@ -450,6 +450,8 @@ Write-OK "OpenAI-compatible proxy created (openai-proxy.cjs)"
 
 # --- Write wrapper (cli.cjs, runs under Bun) --------------------------
 
+& node (Join-Path $ClawDir "feature-gates.cjs") --migrate
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 @'
 {{CLAWGOD:cli.cjs}}
 '@ | Set-Content (Join-Path $ClawDir "cli.cjs") -Encoding UTF8

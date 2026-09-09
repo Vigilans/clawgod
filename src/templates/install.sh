@@ -169,7 +169,7 @@ cat > "$CLAWGOD_DIR/feature-gates.cjs" << 'GATES_EOF'
 GATES_EOF
 info "Patch feature gates created (feature-gates.cjs)"
 
-node "$CLAWGOD_DIR/feature-gates.cjs"
+node "$CLAWGOD_DIR/feature-gates.cjs" --check
 cap_enabled() {
   [ "$(node "$CLAWGOD_DIR/feature-gates.cjs" --enabled "$1")" = "1" ]
 }
@@ -351,6 +351,7 @@ info "OpenAI-compatible proxy created (openai-proxy.cjs)"
 
 # ─── Write wrapper (cli.cjs, runs under Bun) ──────────────────
 
+node "$CLAWGOD_DIR/feature-gates.cjs" --migrate
 cat > "$CLAWGOD_DIR/cli.cjs" << 'WRAPPER_EOF'
 {{CLAWGOD:cli.cjs}}
 WRAPPER_EOF
