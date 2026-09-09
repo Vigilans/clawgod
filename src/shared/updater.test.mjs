@@ -28,7 +28,8 @@ try {
             loaded = true;
             return {};
           }
-          if (['./feature-gates.cjs', './runtime-helpers.cjs', './bun-ant-shim.cjs'].includes(name)) return {};
+          if (name === './feature-gates.cjs') return { isEnabled: () => true };
+          if (['./runtime-helpers.cjs', './bun-ant-shim.cjs'].includes(name)) return {};
           return require(name);
         },
       });

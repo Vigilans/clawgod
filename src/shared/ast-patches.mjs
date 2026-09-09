@@ -127,7 +127,12 @@ export function scanAstPatches(code) {
         !node.async && !node.generator && node.body.body.length === 1 &&
         node.body.body[0].type === 'ReturnStatement') {
       const value = node.body.body[0].argument;
-      if (literal(value, 'external')) edit('user-type-ant', value, '"ant"');
+      const userTypeId = 'user-type-ant';
+      if (hasGate(node, userTypeId)) results[userTypeId].patched = true;
+      else if (literal(value, 'external')) {
+        results[userTypeId].present = true;
+        edit(userTypeId, value, `(${gate(userTypeId)}?"ant":${code.slice(value.start, value.end)})`);
+      }
       const standalone = expr => expr?.type === 'BinaryExpression' && expr.operator === '===' &&
         member(expr.left, 'isStandaloneExecutable') && expr.left.object.name === 'Bun' && boolean(expr.right, true);
       const typeofBun = expr => expr?.type === 'BinaryExpression' && expr.operator === '<' &&
@@ -145,6 +150,11 @@ export function scanAstPatches(code) {
 
     if ((node.type === 'MethodDefinition' || node.type === 'Property') &&
         propertyName(node) === 'getEnvironmentOverrides' && node.value?.body?.type === 'BlockStatement') {
+      const id = 'growthbook-env-overrides-graph';
+      if (hasGate(node.value, id)) {
+        results[id].patched = true;
+        return;
+      }
       const statements = node.value.body.body;
       // Fix only the dead return that precedes the actual override reader.
       for (let i = 0; i < statements.length - 1; i++) {
@@ -158,8 +168,11 @@ export function scanAstPatches(code) {
             !thisMember(result, 'environmentOverrides') || next.type !== 'VariableDeclaration') continue;
         const readsOverrides = next.declarations.some(d => d.init?.type === 'CallExpression' &&
           member(d.init.callee, 'readEnvironmentOverrides') && thisMember(d.init.callee.object, 'deps'));
-        if (readsOverrides) edit('growthbook-env-overrides-graph', statement,
-          `${code.slice(assignment.start, assignment.end)};`);
+        if (readsOverrides) {
+          results[id].present = true;
+          edit(id, statement, `${code.slice(assignment.start, assignment.end)};` +
+            `if(!(${gate(id)}))return ${code.slice(result.start, result.end)};`);
+        }
       }
     }
   });

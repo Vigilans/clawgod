@@ -37,6 +37,15 @@ const CLEAN_SOURCE = join(__dirname, 'source-backup.json');
 // → gate passes → same behavior as before toggles existed.
 
 const FEATURES = {
+  'bun-ant-shim': { desc: 'Bun.ant.CellSegmenter renderer shim', patchIds: [], runtimeIds: ["bun-ant-shim"] },
+  'anthropic-user-type': { desc: 'anthropic-user-type', patchIds: ["user-type-ant"] },
+  'features-config': { desc: 'features-config', patchIds: ["growthbook-env-overrides","growthbook-env-overrides-graph","growthbook-config-overrides"], runtimeIds: ["features-config"] },
+  'update-command-redirect': { desc: 'update-command-redirect', patchIds: ["update-redirect"] },
+  'macos-image-paste': { desc: 'macos-image-paste', patchIds: ["macos-cmdv-image-paste"] },
+  'provider-config': { desc: 'provider-config', patchIds: [], runtimeIds: ["provider-config"] },
+  'lean-settings': { desc: 'lean-settings', patchIds: [], runtimeIds: ["lean-settings"] },
+  'update-notification': { desc: 'update-notification', patchIds: [], runtimeIds: ["update-notification"] },
+  'remove-attribution-header': { desc: 'remove-attribution-header', patchIds: [], runtimeIds: ["remove-attribution-header"] },
   'custom-model-aliases': { desc: 'custom-model-aliases', patchIds: ["custom-alias-env","custom-alias-schema","custom-alias-picker","custom-alias-resolve"] },
   'hook-update-agent-model': { desc: 'hook-update-agent-model', patchIds: ["hook-input-validation","hook-input-origin","hook-permission-validation"] },
   'send-message-resume-model': { desc: 'send-message-resume-model', patchIds: ["agent-model-metadata","agent-model-restore","agent-model-query"] },
@@ -412,6 +421,7 @@ const patches = [
   },
   {
     id: 'user-type-ant',
+    toggleable: true,
     name: 'USER_TYPE → ant',
     ast: true,
   },
@@ -433,10 +443,11 @@ const patches = [
   },
   {
     id: 'growthbook-env-overrides',
+    toggleable: true,
     name: 'GrowthBook env overrides',
     pattern: /function ([\w$]+)\(\)\{if\(!([\w$]+)\)=!0;return ([\w$]+)\}/g,
     replacer: (m, fn, flag, val) =>
-      `function ${fn}(){if(!${flag}){${flag}=!0;try{let e=process.env.CLAUDE_INTERNAL_FC_OVERRIDES;if(e)${val}=JSON.parse(e)}catch(e){}}return ${val}}`,
+      `function ${fn}(){if(!${flag}){${flag}=!0;try{let e=${gate('growthbook-env-overrides')}?process.env.CLAUDE_INTERNAL_FC_OVERRIDES:void 0;if(e)${val}=JSON.parse(e)}catch(e){}}return ${val}}`,
     unique: true,  // must match exactly 1
   },
   {
@@ -450,16 +461,18 @@ const patches = [
     // Replace the dead return with the parsed-flag assignment so the body
     // reaches the reader once. Locate it only in getEnvironmentOverrides.
     id: 'growthbook-env-overrides-graph',
+    toggleable: true,
     name: 'GrowthBook env overrides (graph dead-code fix)',
     ast: true,
     optional: true,
   },
   {
     id: 'growthbook-config-overrides',
+    toggleable: true,
     name: 'GrowthBook config overrides',
     pattern: /function ([\w$]+)\(\)\{return\}(function)/g,
     replacer: (m, fn, next) =>
-      `function ${fn}(){return null}${next}`,
+      `function ${fn}(){return ${gate('growthbook-config-overrides')}?null:void 0}${next}`,
     selectIndex: 0,
     validate: (match, code) => {
       const pos = code.indexOf(match);
@@ -677,6 +690,7 @@ const patches = [
     // Match any one-letter minified helper via `identifier(` rather than
     // hardcoding a name, so a future rename keeps matching.
     id: 'update-redirect',
+    toggleable: true,
     name: "Redirect `claude update` to clawgod self-update",
     pattern: /(\.command\("update"\)\.alias\("upgrade"\)\.description\("[^"]+"\))(\.action\((?:[A-Za-z_$][\w$]*\()?async\([^)]*\)=>\{)/g,
     replacer: (m, chain, action) => {
@@ -694,7 +708,8 @@ const patches = [
         "if($p){iex(irm -Proxy $p $u)}else{iex(irm $u)}";
       const psB64 = Buffer.from(psScript, 'utf16le').toString('base64');
       return (
-        chain + '.allowUnknownOption()' + action +
+        chain + `.allowUnknownOption(${gate('update-redirect')})` + action +
+        `if(${gate('update-redirect')}){` +
         `const _ui=process.argv.findIndex(a=>a==="update"||a==="upgrade");` +
         `const _ua=_ui>=0?process.argv.slice(_ui+1):[];` +
         `const _vi=_ua.indexOf("--version");` +
@@ -708,7 +723,7 @@ const patches = [
         `const _w=process.platform==='win32';` +
         `const _c=_w?['powershell','-NoProfile','-EncodedCommand','${psB64}']:['bash','-c','curl -fsSL https://github.com/0Chencc/clawgod/releases/latest/download/install.sh | bash'];` +
         `const _r=require('child_process').spawnSync(_c[0],_c.slice(1),{stdio:'inherit',env:process.env});` +
-        `process.exit(_r.status||0);`
+        `process.exit(_r.status||0);}`
       );
     },
     sentinel: '.command("update").alias("upgrade")',
@@ -819,10 +834,11 @@ const patches = [
     // Patched:
     //   if(L.length===0&&R.length>0){at("input_image_drag","read_failed");if(d&&D.length===0){m();return}D.push(...R)}
     id: 'macos-cmdv-image-paste',
+    toggleable: true,
     name: 'macOS Cmd+V image paste fallback to clipboard read',
     pattern: /if\(([\w$]+)\.length===0&&([\w$]+)\.length>0\)([\w$]+)\("input_image_drag","read_failed"\),([\w$]+)\.push\(\.\.\.\2\)/g,
     replacer: (m, L, R, at, D) =>
-      `if(${L}.length===0&&${R}.length>0){${at}("input_image_drag","read_failed");if(d&&${D}.length===0){m();return}${D}.push(...${R})}`,
+      `if(${L}.length===0&&${R}.length>0){${at}("input_image_drag","read_failed");if(${gate('macos-cmdv-image-paste')}&&d&&${D}.length===0){m();return}${D}.push(...${R})}`,
     sentinel: '"input_image_drag","read_failed"',
     optional: true,
   },
@@ -1062,16 +1078,6 @@ const tolerateStale = args.includes('--tolerate-stale');
 // consumes this to weave the META constant into the wrapper sources, so
 // FEATURES stays the single source of truth (no hand-maintained copy).
 // Runs BEFORE any file is touched — safe to invoke anywhere.
-if (dumpFeatures) {
-  const meta = {};
-  for (const [fid, def] of Object.entries(FEATURES)) {
-    for (const pid of def.patchIds) {
-      (meta[pid] ??= []).push(fid);
-    }
-  }
-  console.log(JSON.stringify(meta));
-  process.exit(0);
-}
 
 // ── Registry self-check (authoring guardrail, fails fast) ──
 // Enforces the classification contract on the static data above, so a
@@ -1094,7 +1100,12 @@ if (dumpFeatures) {
     else if (byId.has(p.id)) errs.push(`duplicate patch id: ${p.id}`);
     else byId.set(p.id, p);
   }
+  const runtimeIds = new Set();
   for (const [fid, def] of Object.entries(FEATURES)) {
+    for (const id of def.runtimeIds || []) {
+      if (byId.has(id) || runtimeIds.has(id)) errs.push(`duplicate runtime id: ${id}`);
+      runtimeIds.add(id);
+    }
     for (const pid of def.patchIds) {
       const p = byId.get(pid);
       if (!p) { errs.push(`feature '${fid}' references unknown patch id '${pid}'`); continue; }
@@ -1111,6 +1122,18 @@ if (dumpFeatures) {
     process.exit(1);
   }
 })();
+
+if (dumpFeatures) {
+  const meta = {};
+  for (const [fid, def] of Object.entries(FEATURES)) {
+    for (const pid of [...def.patchIds, ...(def.runtimeIds || [])]) {
+      (meta[pid] ??= []).push(fid);
+    }
+  }
+  console.log(JSON.stringify(meta));
+  process.exit(0);
+}
+
 
 // The patcher itself is unconditionally stateless w.r.t. feature config:
 // every patch always bakes in. Whether a toggleable patch's effect is ON

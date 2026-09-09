@@ -50,8 +50,9 @@ for (const toggle of [undefined, true, false]) {
   const result = runInNewContext(`${patched};const gb=new GrowthBook();
     [userType(),standalone(),voice(),config.enabled,command.isEnabled(),neighbor.isEnabled(),
      gb.getEnvironmentOverrides().flag,gb.getEnvironmentOverrides().flag,gb.environmentOverridesParsed,dateText("2026-10-12")]`, context);
-  assert.deepEqual(Array.from(result), ['ant', true, toggle !== false, toggle !== false,
-    toggle !== false, false, true, true, true, toggle === false ? "Today\u2019s date is 2026/10/12." : "Today's date is 2026-10-12."]);
+  assert.deepEqual(Array.from(result), [toggle === false ? 'external' : 'ant', true, toggle !== false, toggle !== false,
+    toggle !== false, false, toggle === false ? undefined : true, toggle === false ? undefined : true, true,
+    toggle === false ? "Today\u2019s date is 2026/10/12." : "Today's date is 2026-10-12."]);
   assert.equal(calls, toggle === false ? 1 : 0);
 }
 assert.equal(applyAstEdits(patched, Object.values(scanAstPatches(patched)).flatMap(r => r.matches)), patched,
@@ -157,7 +158,7 @@ try {
     const tolerant = run('--tolerate-stale');
     assert.equal(tolerant.status, 0, tolerant.stderr);
     assert.match(tolerant.stdout, /AST matcher stale.*tolerated/);
-    assert.match(readFileSync(target, 'utf8'), /return "ant"/);
+    assert.match(readFileSync(target, 'utf8'), /user-type-ant.*\?"ant":/);
   }
 } finally {
   rmSync(root, { recursive: true, force: true });
