@@ -7,7 +7,7 @@ set -e
 #  Downloads Claude Code from npm, applies patches, replaces claude command
 #
 #  用法:
-#    curl -fsSL https://raw.githubusercontent.com/0Chencc/clawgod/main/install.sh | bash
+#    curl -fsSL https://raw.githubusercontent.com/Vigilans/clawgod/dev/install.sh | bash
 #    # 或
 #    bash install.sh [--version 2.1.89] [--no-upgrade]
 # ─────────────────────────────────────────────────────────
@@ -558,7 +558,7 @@ if [ \"\$1\" = \"import\" ]; then
 fi
 if [ ! -f \"\$CLAWGOD_CLI\" ]; then
   echo \"clawgod: installation at \$CLAWGOD_DIR is missing (cli.cjs not found)\" >&2
-  echo \"clawgod: reinstall via  curl -fsSL https://github.com/0Chencc/clawgod/releases/latest/download/install.sh | bash\" >&2
+  echo \"clawgod: reinstall via  curl -fsSL https://raw.githubusercontent.com/Vigilans/clawgod/dev/install.sh | bash\" >&2
   echo \"clawgod: or remove this launcher:  rm \\\"\$0\\\"\" >&2
   exit 127
 fi
@@ -672,7 +672,7 @@ dim "    claude update --version 2.1.180   (install a specific version)"
 dim "    claude update --no-upgrade        (re-patch without downloading)"
 fi
 dim "  To leave clawgod and use vanilla update:"
-dim "    bash ~/.clawgod/install.sh --uninstall"
+dim "    curl -fsSL https://raw.githubusercontent.com/Vigilans/clawgod/dev/install.sh | CLAWGOD_DIR=$(printf '%q' "$CLAWGOD_DIR") bash -s -- --uninstall"
 echo ""
 warn "  If 'claude' still runs the old version, restart your terminal or run: hash -r"
 echo ""

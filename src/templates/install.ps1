@@ -753,7 +753,8 @@ Write-Dim "    claude update --version 2.1.180   (install a specific version)"
 Write-Dim "    claude update --no-upgrade        (re-patch without downloading)"
 }
 Write-Dim "  To leave clawgod and use vanilla update:"
-Write-Dim "    bash ~/.clawgod/install.sh --uninstall"
+$uninstallDir = $ClawDir.Replace("'", "''")
+Write-Dim "    `$env:CLAWGOD_DIR='$uninstallDir'; & ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/Vigilans/clawgod/dev/install.ps1'))) -Uninstall"
 Write-Host ""
 Write-Err "  If 'claude' still runs the old version, restart your terminal."
 Write-Host ""
