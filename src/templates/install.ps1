@@ -216,6 +216,22 @@ catch {
     exit 1
 }
 
+New-Item -ItemType Directory -Force -Path $ClawDir | Out-Null
+# --- Write patch feature gates -----------------------------------------
+
+@'
+{{CLAWGOD:feature-gates.cjs}}
+'@ | Set-Content (Join-Path $ClawDir "feature-gates.cjs") -Encoding UTF8
+Write-OK "Patch feature gates created (feature-gates.cjs)"
+
+& node (Join-Path $ClawDir "feature-gates.cjs")
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+function Test-FeatureEnabled([string]$Name) {
+    $value = & node (Join-Path $ClawDir "feature-gates.cjs") --enabled $Name
+    if ($LASTEXITCODE -ne 0) { throw "Could not read feature configuration" }
+    return $value -eq "1"
+}
+
 # --- Handle -NoUpgrade (skip download, re-patch only) -----------------
 if ($NoUpgrade) {
     New-Item -ItemType Directory -Force -Path $ClawDir | Out-Null
@@ -432,13 +448,6 @@ if (-not $ProxySource) {
 $ProxySource | Set-Content (Join-Path $ClawDir "openai-proxy.cjs") -Encoding UTF8
 Write-OK "OpenAI-compatible proxy created (openai-proxy.cjs)"
 
-# --- Write patch feature gates -----------------------------------------
-
-@'
-{{CLAWGOD:feature-gates.cjs}}
-'@ | Set-Content (Join-Path $ClawDir "feature-gates.cjs") -Encoding UTF8
-Write-OK "Patch feature gates created (feature-gates.cjs)"
-
 # --- Write wrapper (cli.cjs, runs under Bun) --------------------------
 
 @'
@@ -476,7 +485,7 @@ if ($LASTEXITCODE -ne 0) {
 # --- Create default configs -------------------------------------------
 
 $featuresFile = Join-Path $ClawDir "features.json"
-if (-not (Test-Path $featuresFile)) {
+if ((Test-FeatureEnabled "features-config") -and -not (Test-Path $featuresFile)) {
     $featuresJson = @'
 {{CLAWGOD:features.json}}
 '@
@@ -497,9 +506,11 @@ $leanOffFlag = Join-Path $ClawDir ".lean-disabled"
 $leanMaxFlag = Join-Path $ClawDir ".lean-max"
 $claudeSettingsDir = Join-Path $env:USERPROFILE ".claude"
 $claudeSettings = Join-Path $claudeSettingsDir "settings.json"
-New-Item -ItemType Directory -Force -Path $claudeSettingsDir | Out-Null
+if (Test-FeatureEnabled "lean-settings") {
+    New-Item -ItemType Directory -Force -Path $claudeSettingsDir | Out-Null
+}
 
-if ($LeanOff) {
+if ((Test-FeatureEnabled "lean-settings") -and $LeanOff) {
     New-Item -ItemType File -Force -Path $leanOffFlag | Out-Null
     if (Test-Path $leanMaxFlag) { Remove-Item $leanMaxFlag -Force }
     $leanRemoveScript = @'
@@ -509,15 +520,15 @@ if ($LeanOff) {
         try { node -e $leanRemoveScript "$claudeSettings" 2>$null } catch {}
     }
     Write-OK "Lean mode disabled (all tools restored)"
-} elseif ($LeanOn) {
+} elseif ((Test-FeatureEnabled "lean-settings") -and $LeanOn) {
     if (Test-Path $leanOffFlag) { Remove-Item $leanOffFlag -Force }
     if (Test-Path $leanMaxFlag) { Remove-Item $leanMaxFlag -Force }
-} elseif ($LeanMax) {
+} elseif ((Test-FeatureEnabled "lean-settings") -and $LeanMax) {
     if (Test-Path $leanOffFlag) { Remove-Item $leanOffFlag -Force }
     New-Item -ItemType File -Force -Path $leanMaxFlag | Out-Null
 }
 
-if (-not (Test-Path $leanOffFlag)) {
+if ((Test-FeatureEnabled "lean-settings") -and -not (Test-Path $leanOffFlag)) {
     $leanIsMax = (Test-Path $leanMaxFlag)
     $leanApplyScript = @'
 {{CLAWGOD:lean-apply.cjs}}
@@ -715,21 +726,27 @@ if ($userPath -notlike "*$BinDir*") {
 Write-Host ""
 Write-Host "  ClawGod installed!" -ForegroundColor Green
 Write-Host ""
-Write-Dim "  claude            -- Start patched Claude Code (green logo)"
+if (Test-FeatureEnabled "theme") {
+    Write-Dim "  claude            -- Start patched Claude Code (green logo)"
+} else {
+    Write-Dim "  claude            -- Start patched Claude Code"
+}
 Write-Dim "  claude.orig       -- Run original unpatched Claude Code"
 Write-Host ""
+if (Test-FeatureEnabled "update-command-redirect") {
 Write-Dim "  Updates: 'claude update' is patched to route through this installer."
 Write-Dim "  Just run it as usual -- pulls latest Anthropic release + re-patches"
 Write-Dim "  in one step. Extra options:"
 Write-Dim "    claude update --version 2.1.180   (install a specific version)"
 Write-Dim "    claude update --no-upgrade        (re-patch without downloading)"
+}
 Write-Dim "  To leave clawgod and use vanilla update:"
 Write-Dim "    bash ~/.clawgod/install.sh --uninstall"
 Write-Host ""
 Write-Err "  If 'claude' still runs the old version, restart your terminal."
 Write-Host ""
-Write-Dim "  Config: ~/.clawgod/provider.json"
-Write-Dim "  Flags:  ~/.clawgod/features.json"
+if (Test-FeatureEnabled "provider-config") { Write-Dim "  Config: $ClawDir/provider.json" }
+if (Test-FeatureEnabled "features-config") { Write-Dim "  Flags: $ClawDir/features.json" }
 Write-Host ""
 Write-Dim "  If 'claude' panics with 'Expected CommonJS module to have a function wrapper',"
 Write-Dim "  your Bun lags Anthropic's embedded Bun. Upgrade with one of:"

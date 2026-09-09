@@ -142,6 +142,17 @@ claude.orig         # 原版未修改版本（自动备份）
 | `cautious-actions` | 移除 "Executing actions with care" 段落 |
 | `not-logged-in` | 移除 "Not logged in" 提示 |
 | `message-filter` | 绕过非 ant 用户的消息/附件过滤 |
+| `custom-model-aliases` | Agent schema、模型选择器和模型解析中的自定义别名 |
+| `hook-update-agent-model` | PreToolUse hook 提供的 Agent 模型覆盖 |
+| `send-message-resume-model` | 恢复 Agent 时保留已解析的模型 |
+| `anthropic-user-type` | 将内部用户类型设为 ant |
+| `features-config` | 加载 features.json 并启用 GrowthBook 覆盖 |
+| `provider-config` | 加载 provider.json 并配置 provider 路由 |
+| `lean-settings` | 安装器和命令行的 lean 设置修改 |
+| `update-notification` | 后台 ClawGod 更新检查与提示 |
+| `update-command-redirect` | 将 claude update 转交 ClawGod 安装器 |
+| `remove-attribution-header` | 第三方端点的 attribution header 处理 |
+| `macos-image-paste` | macOS 剪贴板图片回退 |
 
 仅对单次启动生效时用环境变量——feature id 大写、连字符转下划线：
 

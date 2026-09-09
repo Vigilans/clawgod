@@ -30,6 +30,9 @@ CI runs it in the `build-sources` job (`compat-daily.yml`).
   including `cli.cjs` (the launcher/patcher bootstrap shared by Unix and
   Windows). `feature-gates.cjs` carries a `{{CLAWGOD:FEATURES_META}}` marker
   that build.js replaces with the inverted FEATURES registry from patch.mjs.
+  Registry entries use `patchIds` for source patches and optional `runtimeIds`
+  for wrapper/installer actions. Installers query the generated gate module
+  with `--enabled <feature>`; both platforms share its configuration rules.
 - `windows/` contains genuinely platform-specific payloads (the PowerShell
   build applies `escapeNonAscii` per file in build.js).
 - `templates/` contain the shell around those payloads and use

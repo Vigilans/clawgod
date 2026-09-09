@@ -9,14 +9,19 @@
 // patch.mjs (single source of truth) — do not hand-edit. Each gated patch in
 // cli.original.cjs checks its own entry:
 //   globalThis.__clawgodPatches?.["<patchId>"] !== false
-// Absent/failed config → gate table absent → all gates default ON, which is
-// exactly the pre-toggle behavior.
+// Missing config defaults all gates ON. Invalid configuration stops startup.
 // {{CLAWGOD:FEATURES_META}}
 
-var clawgodDir = require('path').join(require('os').homedir(), '.clawgod');
+var clawgodDir = __dirname;
 
 var _cfg = {};
-try { _cfg = JSON.parse(require('fs').readFileSync(require('path').join(clawgodDir, 'patches.json'), 'utf8')); } catch {}
+try {
+  _cfg = JSON.parse(require('fs').readFileSync(require('path').join(clawgodDir, 'patches.json'), 'utf8').replace(/^\uFEFF/, ''));
+} catch (error) {
+  if (error.code !== 'ENOENT') throw error;
+}
+if (!_cfg || typeof _cfg !== 'object' || Array.isArray(_cfg)) throw new Error('patches.json must contain a feature object');
+if (Object.hasOwn(_cfg, 'enabled')) throw new Error('Legacy patches.json: rerun the ClawGod installer to migrate capability settings');
 for (var _name in process.env) {
   if (_name.indexOf('CLAWGOD_FEATURE_') !== 0) continue;
   var _val = process.env[_name];
@@ -24,7 +29,7 @@ for (var _name in process.env) {
   _cfg[_name.slice('CLAWGOD_FEATURE_'.length).toLowerCase().replace(/_/g, '-')] = _val === 'true';
 }
 
-// META keys are patch ids; a feature id is "known" when some patch lists it.
+// META keys are patch/runtime ids; their values name the known features.
 // Unknown keys are residue (renamed/removed features).
 for (var _k in _cfg) {
   var _known = false;
@@ -44,3 +49,11 @@ for (var _pid in CLAWGOD_FEATURES_META) {
   _gate[_pid] = _on;
 }
 globalThis.__clawgodPatches = _gate;
+
+module.exports.isEnabled = function (feature) { return _cfg[feature] !== false; };
+if (require.main === module && process.argv[2] === '--enabled') {
+  if (!Object.values(CLAWGOD_FEATURES_META).some(function (features) { return features.includes(process.argv[3]); })) {
+    throw new Error('Unknown feature: ' + process.argv[3]);
+  }
+  process.stdout.write(module.exports.isEnabled(process.argv[3]) ? '1\n' : '0\n');
+}

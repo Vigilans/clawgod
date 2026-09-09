@@ -161,6 +161,19 @@ if ! command -v rg &>/dev/null; then
 fi
 info "ripgrep: $(rg --version | head -1)"
 
+mkdir -p "$CLAWGOD_DIR" "$BIN_DIR"
+# ─── Write patch feature gates ────────────────────────────────
+
+cat > "$CLAWGOD_DIR/feature-gates.cjs" << 'GATES_EOF'
+{{CLAWGOD:feature-gates.cjs}}
+GATES_EOF
+info "Patch feature gates created (feature-gates.cjs)"
+
+node "$CLAWGOD_DIR/feature-gates.cjs"
+cap_enabled() {
+  [ "$(node "$CLAWGOD_DIR/feature-gates.cjs" --enabled "$1")" = "1" ]
+}
+
 # ─── Handle --no-upgrade (skip download, re-patch only) ──────────────
 mkdir -p "$CLAWGOD_DIR" "$BIN_DIR"
 
@@ -336,13 +349,6 @@ cat > "$CLAWGOD_DIR/openai-proxy.cjs" << 'PROXY_EOF'
 PROXY_EOF
 info "OpenAI-compatible proxy created (openai-proxy.cjs)"
 
-# ─── Write patch feature gates ────────────────────────────────
-
-cat > "$CLAWGOD_DIR/feature-gates.cjs" << 'GATES_EOF'
-{{CLAWGOD:feature-gates.cjs}}
-GATES_EOF
-info "Patch feature gates created (feature-gates.cjs)"
-
 # ─── Write wrapper (cli.cjs, runs under Bun) ──────────────────
 
 cat > "$CLAWGOD_DIR/cli.cjs" << 'WRAPPER_EOF'
@@ -379,7 +385,7 @@ fi
 
 # ─── Create default configs ───────────────────────────
 
-if [ ! -f "$CLAWGOD_DIR/features.json" ]; then
+if cap_enabled features-config && [ ! -f "$CLAWGOD_DIR/features.json" ]; then
   cat > "$CLAWGOD_DIR/features.json" << 'FEATURES_EOF'
 {{CLAWGOD:features.json}}
 FEATURES_EOF
@@ -402,7 +408,7 @@ LEAN_OFF_FLAG="$CLAWGOD_DIR/.lean-disabled"
 LEAN_MAX_FLAG="$CLAWGOD_DIR/.lean-max"
 
 # Handle explicit toggle from CLI (--lean-off / --lean-on / --lean-max)
-if [ "$LEAN_OFF" = "1" ]; then
+if cap_enabled lean-settings && [ "$LEAN_OFF" = "1" ]; then
   touch "$LEAN_OFF_FLAG"; rm -f "$LEAN_MAX_FLAG"
   CLAUDE_SETTINGS="$HOME/.claude/settings.json"
   if [ -f "$CLAUDE_SETTINGS" ]; then
@@ -417,13 +423,13 @@ fs.writeFileSync(p,JSON.stringify(s,null,2)+"\n");
 ' "$CLAUDE_SETTINGS" 2>/dev/null
   fi
   info "Lean mode disabled (all tools restored)"
-elif [ "$LEAN_ON" = "1" ]; then
+elif cap_enabled lean-settings && [ "$LEAN_ON" = "1" ]; then
   rm -f "$LEAN_OFF_FLAG" "$LEAN_MAX_FLAG"
-elif [ "$LEAN_MAX" = "1" ]; then
+elif cap_enabled lean-settings && [ "$LEAN_MAX" = "1" ]; then
   rm -f "$LEAN_OFF_FLAG"; touch "$LEAN_MAX_FLAG"
 fi
 
-if [ ! -f "$LEAN_OFF_FLAG" ]; then
+if cap_enabled lean-settings && [ ! -f "$LEAN_OFF_FLAG" ]; then
   CLAUDE_SETTINGS_DIR="$HOME/.claude"
   CLAUDE_SETTINGS="$CLAUDE_SETTINGS_DIR/settings.json"
   mkdir -p "$CLAUDE_SETTINGS_DIR"
@@ -649,21 +655,27 @@ hash -r 2>/dev/null
 echo ""
 echo -e "  ${BOLD}${GREEN}ClawGod installed!${NC}"
 echo ""
-dim "  claude            — Start patched Claude Code (green logo)"
+if cap_enabled theme; then
+  dim "  claude            — Start patched Claude Code (green logo)"
+else
+  dim "  claude            — Start patched Claude Code"
+fi
 dim "  claude.orig       — Run original unpatched Claude Code"
 echo ""
+if cap_enabled update-command-redirect; then
 dim "  Updates: 'claude update' is patched to route through this installer."
 dim "  Just run it as usual — pulls latest Anthropic release + re-patches"
 dim "  in one step. Extra options:"
 dim "    claude update --version 2.1.180   (install a specific version)"
 dim "    claude update --no-upgrade        (re-patch without downloading)"
+fi
 dim "  To leave clawgod and use vanilla update:"
 dim "    bash ~/.clawgod/install.sh --uninstall"
 echo ""
 warn "  If 'claude' still runs the old version, restart your terminal or run: hash -r"
 echo ""
-dim "  Config: ~/.clawgod/provider.json"
-dim "  Flags:  ~/.clawgod/features.json"
+if cap_enabled provider-config; then dim "  Config: $CLAWGOD_DIR/provider.json"; fi
+if cap_enabled features-config; then dim "  Flags:  $CLAWGOD_DIR/features.json"; fi
 echo ""
 dim "  If 'claude' panics with 'Expected CommonJS module to have a function wrapper',"
 dim "  your Bun lags Anthropic's embedded Bun. Upgrade with one of:"

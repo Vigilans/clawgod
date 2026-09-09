@@ -142,6 +142,17 @@ claude.orig         # Original unpatched version (auto-backed-up)
 | `cautious-actions` | Removes "Executing actions with care" section from system prompt |
 | `not-logged-in` | Removes "Not logged in" notice |
 | `message-filter` | Bypasses non-ant message/attachment filters |
+| `custom-model-aliases` | Custom aliases in Agent schemas, the model picker and model resolution |
+| `hook-update-agent-model` | Agent model overrides supplied by PreToolUse hooks |
+| `send-message-resume-model` | Preserves resolved Agent models across resume |
+| `anthropic-user-type` | Sets the internal user type to ant |
+| `features-config` | Loads features.json and enables GrowthBook overrides |
+| `provider-config` | Loads provider.json and configures provider routing |
+| `lean-settings` | Installer and command-line lean settings changes |
+| `update-notification` | Background ClawGod update checks and notices |
+| `update-command-redirect` | Routes claude update through the ClawGod installer |
+| `remove-attribution-header` | Third-party endpoint attribution-header handling |
+| `macos-image-paste` | macOS clipboard image fallback |
 
 For a single launch, set an env var instead — feature id upper-cased, dashes to underscores:
 
