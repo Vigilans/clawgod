@@ -10532,6 +10532,11 @@ for (const p of [...patches.filter(p => p.ast), ...patches.filter(p => !p.ast)])
       applied++;
       continue;
     }
+    if (p.toggleable && Object.values(files).some((code) => code.includes(gate(p.id)))) {
+      console.log(`  ✅ ${p.name} (already applied, runtime gate present)`);
+      applied++;
+      continue;
+    }
     if (p.optional) {
       console.log(`  ⏭  ${p.name} (not present in this version)`);
       skipped++;
@@ -10552,8 +10557,8 @@ for (const p of [...patches.filter(p => p.ast), ...patches.filter(p => !p.ast)])
         }
         continue;
       }
-      console.log(`  ✅ ${p.name} (already applied, sentinel absent)`);
-      applied++;
+      console.log(`  ⏭  ${p.name} (not present in this version, sentinel absent)`);
+      skipped++;
       continue;
     }
     console.log(`  ⚠️  ${p.name} (0 matches, no sentinel — cannot verify)`);
