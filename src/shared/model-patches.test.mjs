@@ -45,6 +45,23 @@ for (const enabled of [false, true]) {
 }
 console.log('[model-patches.test] resume metadata gate ok');
 
+const metadataWithExplicit = apply('agent-model-metadata',
+  'async function*spawn({agentDefinition:def,toolUseContext:ctx,model:chosen,extraMetadata:extra}){let perm=permissions(ctx),mode=perm.mode,parent=parentModel(ctx),resolved=resolve(def,parent,chosen,mode,void 0);' +
+  '/* long generator body */'.repeat(450) +
+  'yield{agentType:def.agentType,description:"test",...chosen&&{model:chosen},...extra}}');
+for (const enabled of [false, true]) for (const chosen of [undefined, 'custom', 'inherit']) for (const extra of [undefined, {model: 'metadata-model', marker: 'kept'}]) {
+  const context = {
+    __clawgodPatches: { 'agent-model-metadata': enabled },
+    permissions: () => ({mode: 'default'}), parentModel: () => 'parent-model',
+    resolve: () => 'resolved-model', chosen, extra,
+  };
+  const result = await runInNewContext(metadataWithExplicit + ';spawn({agentDefinition:{agentType:"test"},toolUseContext:{},model:chosen,extraMetadata:extra}).next()', context);
+  assert.equal(result.value.model, extra?.model ?? (enabled ? 'resolved-model' : chosen));
+  assert.equal(result.value.marker, extra?.marker);
+  assert.equal(result.value.description, 'test');
+}
+console.log('[model-patches.test] long generators preserve resolved models and native metadata ordering');
+
 const hook = patches.find(p => p.id === 'hook-input-validation');
 const hookCode = hook.replacer('if(result.updatedInput!==void 0){validate();}', 'result', 'parsed', 'tool');
 const permission = patches.find(p => p.id === 'hook-permission-validation');
