@@ -77,6 +77,85 @@ for (const enabled of [false,true]) {
 }
 console.log('[model-patches.test] project alias write gate ok');
 
+const guardedEnv = 'function put(key,value){let upper=key.toUpperCase();return allowed.has(upper)||truthy.has(upper)&&isTrue(value)||falsy.has(upper)&&isFalse(value)||upper==="ANTHROPIC_CUSTOM_HEADERS"&&!unsafeHeaders(value)}';
+const patchedEnv = apply('custom-alias-env-write', guardedEnv);
+for (const enabled of [false, true]) {
+  const context = {
+    __clawgodPatches: { 'custom-alias-env-write': enabled },
+    allowed: new Set(['KNOWN']), truthy: new Set(['DISABLE_TELEMETRY']),
+    falsy: new Set(['OTEL_LOG_RAW_API_BODIES']),
+    isTrue: value => value === '1', isFalse: value => value === '0',
+    unsafeHeaders: value => value.includes('Authorization'),
+  };
+  for (const [key, value] of [
+    ['KNOWN', 'value'], ['UNKNOWN', 'value'],
+    ['DISABLE_TELEMETRY', '1'], ['DISABLE_TELEMETRY', '0'],
+    ['OTEL_LOG_RAW_API_BODIES', '0'], ['OTEL_LOG_RAW_API_BODIES', '1'],
+    ['ANTHROPIC_CUSTOM_HEADERS', 'X-Label: demo'],
+    ['ANTHROPIC_CUSTOM_HEADERS', 'Authorization: test'],
+  ]) {
+    const call = `;put(${JSON.stringify(key)},${JSON.stringify(value)})`;
+    assert.equal(runInNewContext(patchedEnv + call, context), runInNewContext(guardedEnv + call, context), key);
+  }
+  for (const suffix of ['MODEL', 'NAME', 'DESCRIPTION', 'SUPPORTED_CAPABILITIES']) {
+    assert.equal(runInNewContext(patchedEnv + `;put("ANTHROPIC_DEFAULT_MY_ALIAS_${suffix}","value")`, context), enabled);
+  }
+}
+
+for (const envObject of ['process.env', 'env']) for (const label of ['custom', 'display(custom)??custom']) {
+  const picker = apply('custom-alias-picker',
+    `if(custom&&!options.some((option)=>option.value===custom))options.push({value:custom,label:${envObject}.ANTHROPIC_CUSTOM_MODEL_OPTION_NAME??${label},description:${envObject}.ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION??\`Custom model (\${custom})\`});`);
+  for (const enabled of [false, true]) for (const custom of [undefined, 'native-model']) {
+    const env = {
+      ANTHROPIC_DEFAULT_CUSTOM_MODEL: 'provider-model',
+      ANTHROPIC_DEFAULT_CUSTOM_NAME: 'Display name',
+      ANTHROPIC_DEFAULT_OTHER_ALIAS_MODEL: 'second-model',
+      ANTHROPIC_DEFAULT_OTHER_ALIAS_DESCRIPTION: 'Second description',
+      ANTHROPIC_DEFAULT_OPUS_MODEL: 'native-opus',
+    };
+    const options = [{value: 'opus'}];
+    const context = {
+      __clawgodPatches: { 'custom-alias-picker': enabled },
+      process: {env}, env, custom, options, display: () => 'Native display',
+    };
+    runInNewContext(picker, context);
+    runInNewContext(picker, context);
+    assert.equal(options.length, 1 + (custom ? 1 : 0) + (enabled ? 2 : 0));
+    if (custom) assert.equal(options.find(option => option.value === custom).label, label.includes('display') ? 'Native display' : custom);
+    if (enabled) {
+      assert.equal(options.find(option => option.value === 'custom').label, 'provider-model');
+      assert.equal(options.find(option => option.value === 'custom').description, 'Custom Display name model');
+      assert.equal(options.find(option => option.value === 'other-alias').description, 'Second description');
+    }
+  }
+}
+
+for (const guard of [
+  'if(!model||builtIn(model))return{ok:!0,model:model};try{',
+  'if(!model)return{ok:!0,model:model};if(builtIn(model))return{ok:!0,model:model.trim().toLowerCase()};try{',
+]) {
+  const command = 'async function choose(model){' + guard + 'return await validate(model)}catch(error){throw error}}';
+  const patched = apply('custom-alias-command', command);
+  for (const enabled of [false, true]) for (const value of [undefined, ' Opus ', 'custom', ' OTHER-ALIAS ', 'unknown']) {
+    let calls = 0;
+    const context = {
+      __clawgodPatches: { 'custom-alias-command': enabled },
+      process: {env: {ANTHROPIC_DEFAULT_CUSTOM_MODEL: 'provider-model', ANTHROPIC_DEFAULT_OTHER_ALIAS_MODEL: 'second-model'}},
+      builtIn: model => model.trim().toLowerCase() === 'opus',
+      validate: async model => { calls++; return {ok: false, model}; }, value,
+    };
+    const result = await runInNewContext(patched + ';choose(value)', context);
+    const custom = value === 'custom' || value === ' OTHER-ALIAS ';
+    assert.equal(result.ok, value === undefined || value === ' Opus ' || enabled && custom);
+    assert.equal(calls, result.ok ? 0 : 1);
+    if (!enabled || !custom) {
+      const native = await runInNewContext(command + ';choose(value)', context);
+      assert.equal(JSON.stringify(result), JSON.stringify(native));
+    }
+  }
+}
+console.log('[model-patches.test] expanded env guards, picker labels and split command validation ok');
+
 const expressionSchema = apply('custom-alias-schema','({model:z(["sonnet","opus","haiku","fable"]).optional().describe(`Pick`+(extra?" extended":"")),run_in_background:false})');
 for (const enabled of [false,true]) {
   const result=runInNewContext(expressionSchema,{
