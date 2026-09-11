@@ -8970,7 +8970,7 @@ export const AST_PATCH_IDS = [
   'geo-stego-date',
 ];
 
-const anchors = ['external', 'isStandaloneExecutable', 'environmentOverridesParsed',
+const anchors = ['external', 'isStandaloneExecutable', 'environmentOverridesParsed', 'getEnvironmentOverrides',
   'pixelValidation', 'ultraplan', 'tengu_amber_quartz_disabled', 'allow_voice_mode', 's date is '];
 const gate = id => `globalThis.__clawgodPatches?.[${JSON.stringify(id)}]!==!1`;
 const literal = (node, value) => node?.type === 'Literal' && node.value === value;
@@ -9125,7 +9125,16 @@ export function scanAstPatches(code) {
         results[id].patched = true;
         return;
       }
+      results[id].present = true;
       const statements = node.value.body.body;
+      if (statements.length === 1 && statements[0].type === 'ReturnStatement' && literal(statements[0].argument, null)) {
+        edit(id, node.value.body, `{if(!(${gate(id)}))return null;` +
+          'let raw=this.deps.readEnvironmentOverrides();if(raw===this.environmentOverridesRaw)return this.environmentOverrides;' +
+          'this.environmentOverridesRaw=raw;this.environmentOverrides=null;' +
+          'try{if(raw){let value=JSON.parse(raw);if(value&&typeof value==="object"&&!Array.isArray(value))this.environmentOverrides=value}}catch{}' +
+          'return this.environmentOverrides}');
+        return;
+      }
       // Fix only the dead return that precedes the actual override reader.
       for (let i = 0; i < statements.length - 1; i++) {
         const statement = statements[i];
@@ -9139,7 +9148,6 @@ export function scanAstPatches(code) {
         const readsOverrides = next.declarations.some(d => d.init?.type === 'CallExpression' &&
           member(d.init.callee, 'readEnvironmentOverrides') && thisMember(d.init.callee.object, 'deps'));
         if (readsOverrides) {
-          results[id].present = true;
           edit(id, statement, `${code.slice(assignment.start, assignment.end)};` +
             `if(!(${gate(id)}))return ${code.slice(result.start, result.end)};`);
         }
@@ -9682,20 +9690,13 @@ const patches = [
     sentinel: 'return N0t;return bLa=!0,N0t;let e=process.env.CLAUDE_INTERNAL_FC_OVERRIDES',
   },
   {
-    // v2.1.245+ moved env-override parsing into a GrowthBook class method and
-    // introduced a dead-code bug: the lazy parse short-circuits on the second
-    // return, so features.json (CLAUDE_INTERNAL_FC_OVERRIDES) never reaches the
-    // feature store — tengu_prompt_cache_1h_config & friends silently lose effect.
-    //
-    // v2.1.246 shape (chunk graph, _668.js):
-    //   getEnvironmentOverrides(){if(this.environmentOverridesParsed)return this.environmentOverrides;return this.environmentOverridesParsed=!0,this.environmentOverrides;let e=this.deps.readEnvironmentOverrides();if(!e)return this.environmentOverrides;try{this.environmentOverrides=Ce(e),p(`GrowthBook: Using env var overrides for ${...}`)}catch{p(`GrowthBook: Failed to parse CLAUDE_INTERNAL_FC_OVERRIDES: ${e}`,...)}return this.environmentOverrides}
-    // Replace the dead return with the parsed-flag assignment so the body
-    // reaches the reader once. Locate it only in getEnvironmentOverrides.
+    // Class-based GrowthBook clients expose either an early-return parser or
+    // a compact getter stub. Read overrides through the client's dependency,
+    // reuse its parsing cache, and retain the native no-override result when disabled.
     id: 'growthbook-env-overrides-graph',
     toggleable: true,
-    name: 'GrowthBook env overrides (graph dead-code fix)',
+    name: 'GrowthBook env overrides (graph)',
     ast: true,
-    optional: true,
   },
   {
     id: 'growthbook-config-overrides',

@@ -6,7 +6,7 @@ export const AST_PATCH_IDS = [
   'geo-stego-date',
 ];
 
-const anchors = ['external', 'isStandaloneExecutable', 'environmentOverridesParsed',
+const anchors = ['external', 'isStandaloneExecutable', 'environmentOverridesParsed', 'getEnvironmentOverrides',
   'pixelValidation', 'ultraplan', 'tengu_amber_quartz_disabled', 'allow_voice_mode', 's date is '];
 const gate = id => `globalThis.__clawgodPatches?.[${JSON.stringify(id)}]!==!1`;
 const literal = (node, value) => node?.type === 'Literal' && node.value === value;
@@ -161,7 +161,16 @@ export function scanAstPatches(code) {
         results[id].patched = true;
         return;
       }
+      results[id].present = true;
       const statements = node.value.body.body;
+      if (statements.length === 1 && statements[0].type === 'ReturnStatement' && literal(statements[0].argument, null)) {
+        edit(id, node.value.body, `{if(!(${gate(id)}))return null;` +
+          'let raw=this.deps.readEnvironmentOverrides();if(raw===this.environmentOverridesRaw)return this.environmentOverrides;' +
+          'this.environmentOverridesRaw=raw;this.environmentOverrides=null;' +
+          'try{if(raw){let value=JSON.parse(raw);if(value&&typeof value==="object"&&!Array.isArray(value))this.environmentOverrides=value}}catch{}' +
+          'return this.environmentOverrides}');
+        return;
+      }
       // Fix only the dead return that precedes the actual override reader.
       for (let i = 0; i < statements.length - 1; i++) {
         const statement = statements[i];
@@ -175,7 +184,6 @@ export function scanAstPatches(code) {
         const readsOverrides = next.declarations.some(d => d.init?.type === 'CallExpression' &&
           member(d.init.callee, 'readEnvironmentOverrides') && thisMember(d.init.callee.object, 'deps'));
         if (readsOverrides) {
-          results[id].present = true;
           edit(id, statement, `${code.slice(assignment.start, assignment.end)};` +
             `if(!(${gate(id)}))return ${code.slice(result.start, result.end)};`);
         }
