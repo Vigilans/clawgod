@@ -37,3 +37,53 @@ for(const fixture of [
   }),enabled?null:undefined);
 }
 console.log('[version-gates.test] GrowthBook function and class overrides ok');
+
+for(const method of [
+  'getEnvironmentOverrides(){if(this.environmentOverridesParsed)return this.environmentOverrides;return this.environmentOverridesParsed=!0,this.environmentOverrides;let e=this.deps.readEnvironmentOverrides();if(!e)return this.environmentOverrides;try{this.environmentOverrides=JSON.parse(e)}catch{}return this.environmentOverrides}',
+  'getEnvironmentOverrides(){return null}',
+]) for(const enabled of [false,true]) for(const raw of [undefined,'','invalid','null','{"off":false,"nested":{"value":"override"}}']) {
+  const stub=method.includes('return null');
+  const fixture='class GrowthBook{constructor(deps){this.deps=deps;this.environmentOverridesParsed=false;this.environmentOverrides=null;this.environmentOverridesRaw=undefined}'+method+
+    'checkGateCachedOrBlocking(key){let overrides=this.getEnvironmentOverrides();if(overrides&&key in overrides)return Boolean(overrides[key]);return true}};new GrowthBook(deps)';
+  let reads=0;
+  const client=runInNewContext(apply('growthbook-env-overrides-graph',fixture),{
+    __clawgodPatches:{'growthbook-env-overrides-graph':enabled},
+    deps:{readEnvironmentOverrides:()=>{reads++;return raw}},
+  });
+  const result=client.getEnvironmentOverrides();
+  assert.equal(client.getEnvironmentOverrides(),result);
+  assert.equal(reads,enabled?(stub?2:1):0);
+  assert.equal(client.checkGateCachedOrBlocking('off'),enabled&&raw?.startsWith('{')?false:true);
+  assert.equal(client.checkGateCachedOrBlocking('missing'),true);
+  assert.equal(result?.nested?.value,enabled&&raw?.startsWith('{')?'override':undefined);
+  if(!enabled)assert.equal(result,null);
+}
+console.log('[version-gates.test] graph env overrides parse once, preserve false and respect disabled gates');
+
+const dynamicOverrides=apply('growthbook-env-overrides-graph',
+  'class GrowthBook{environmentOverrides=null;environmentOverridesRaw=void 0;constructor(deps){this.deps=deps}getEnvironmentOverrides(){return null}reset(){this.environmentOverrides=null,this.environmentOverridesRaw=void 0}};new GrowthBook(deps)');
+let raw='{"enabled":true}',parses=0,reads=0;
+const gates={'growthbook-env-overrides-graph':true};
+const client=runInNewContext(dynamicOverrides,{
+  __clawgodPatches:gates,
+  deps:{readEnvironmentOverrides:()=>{reads++;return raw}},
+  JSON:{parse(value){parses++;return JSON.parse(value)}},
+});
+assert.equal(client.getEnvironmentOverrides().enabled,true);
+client.getEnvironmentOverrides();
+assert.equal(parses,1);
+raw='{"enabled":false}';
+assert.equal(client.getEnvironmentOverrides().enabled,false);
+assert.equal(parses,2);
+client.reset();
+assert.equal(client.getEnvironmentOverrides().enabled,false);
+assert.equal(parses,3);
+gates['growthbook-env-overrides-graph']=false;
+const beforeDisabled=reads;
+assert.equal(client.getEnvironmentOverrides(),null);
+assert.equal(reads,beforeDisabled);
+gates['growthbook-env-overrides-graph']=true;
+for(raw of ['"text"','7','true','[]','null','invalid','',undefined]) {
+  assert.equal(client.getEnvironmentOverrides(),null);
+}
+console.log('[version-gates.test] compact getter handles config changes, reset, disabled reads and invalid values');

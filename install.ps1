@@ -2511,22 +2511,21 @@ const patches = [
     sentinel: 'return N0t;return bLa=!0,N0t;let e=process.env.CLAUDE_INTERNAL_FC_OVERRIDES',
   },
   {
-    // v2.1.245+ moved env-override parsing into a GrowthBook class method and
-    // introduced a dead-code bug: the lazy parse short-circuits on the second
-    // return, so features.json (CLAUDE_INTERNAL_FC_OVERRIDES) never reaches the
-    // feature store \u2014 tengu_prompt_cache_1h_config & friends silently lose effect.
-    //
-    // v2.1.246 shape (chunk graph, _668.js):
-    //   getEnvironmentOverrides(){if(this.environmentOverridesParsed)return this.environmentOverrides;return this.environmentOverridesParsed=!0,this.environmentOverrides;let e=this.deps.readEnvironmentOverrides();if(!e)return this.environmentOverrides;try{this.environmentOverrides=Ce(e),p(`GrowthBook: Using env var overrides for ${...}`)}catch{p(`GrowthBook: Failed to parse CLAUDE_INTERNAL_FC_OVERRIDES: ${e}`,...)}return this.environmentOverrides}
-    // Patch removes the short-circuit second return so the body reaches the
-    // env-var read. Cross-version: match the lazy-parse idiom (flag=!0,value).
+    // Class-based GrowthBook clients expose either an early-return parser or
+    // a compact getter stub. Read overrides through the client's dependency,
+    // reuse its parsing cache, and retain the native no-override result when disabled.
     id: 'growthbook-env-overrides-graph',
     toggleable: true,
-    name: 'GrowthBook env overrides (graph dead-code fix)',
-    pattern: /return this\.environmentOverridesParsed=!0,this\.environmentOverrides;(?=let e=this\.deps\.readEnvironmentOverrides\(\);)/g,
-    replacer: () => `this.environmentOverridesParsed=!0;if(!(${gate('growthbook-env-overrides-graph')}))return this.environmentOverrides;`,
-    sentinel: 'environmentOverridesParsed=!0,this.environmentOverrides',
-    optional: true,
+    name: 'GrowthBook env overrides (graph)',
+    pattern: /return this\.environmentOverridesParsed=!0,this\.environmentOverrides;(?=let e=this\.deps\.readEnvironmentOverrides\(\);)|getEnvironmentOverrides\(\)\{return null\}/g,
+    replacer: (m) => m.startsWith('getEnvironmentOverrides')
+      ? `getEnvironmentOverrides(){if(!(${gate('growthbook-env-overrides-graph')}))return null;` +
+        'let raw=this.deps.readEnvironmentOverrides();if(raw===this.environmentOverridesRaw)return this.environmentOverrides;' +
+        'this.environmentOverridesRaw=raw;this.environmentOverrides=null;' +
+        'try{if(raw){let value=JSON.parse(raw);if(value&&typeof value==="object"&&!Array.isArray(value))this.environmentOverrides=value}}catch{}' +
+        'return this.environmentOverrides}'
+      : `this.environmentOverridesParsed=!0;if(!(${gate('growthbook-env-overrides-graph')}))return this.environmentOverrides;`,
+    sentinel: 'getEnvironmentOverrides(){',
   },
   {
     id: 'growthbook-config-overrides',
