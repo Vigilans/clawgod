@@ -2402,16 +2402,24 @@ const patches = [
       '[\\s\\S]{0,1200}?\\}\\)\\{' +
       'let (?:[\\w$]+=[\\w$]+\\?\\?\\2\\.session,)?([\\w$]+)=[\\w$]+\\(\\2\\),([\\w$]+)=\\4\\.mode,' +
       '[\\s\\S]{0,300}?([\\w$]+)=[\\w$]+\\(' +
-      '[\\s\\S]{0,300}?,\\3,\\5,' +
-      '[\\s\\S]{0,10000}?\\{agentType:\\1\\.agentType,(?!model:)',
+      '[^;=]{0,300}?,\\3,\\5,' +
+      '[\\s\\S]{0,16000}?\\{agentType:\\1\\.agentType,(?!model:)' +
+      '([^;]{0,2000}?\\.\\.\\.\\3&&\\{model:\\3\\})?',
       'g'
     ),
-    replacer: (m, agentDefinition, toolContext, model, permissionContext, mode, resolvedModel) =>
-      m.replace(
+    // Replace the explicit-model spread in place so it cannot overwrite the
+    // resolved model. Preserve the trailing extraMetadata override order.
+    replacer: (m, agentDefinition, toolContext, model, permissionContext, mode, resolvedModel, metadata) => metadata
+      ? m.replace(
+        `...${model}&&{model:${model}}`,
+        `...(${gate('agent-model-metadata')}?{model:${resolvedModel}}:${model}&&{model:${model}})`
+      )
+      : m.replace(
         `{agentType:${agentDefinition}.agentType,`,
         `{agentType:${agentDefinition}.agentType,...(${gate('agent-model-metadata')}?{model:${resolvedModel}}:{}),`
       ),
     unique: true,
+    sentinel: 'Failed to write agent metadata:',
   },
   {
     // \u22642.1.210: SendMessage ignores the model saved at spawn when it chooses the
