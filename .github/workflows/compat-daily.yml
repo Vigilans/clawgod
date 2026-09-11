@@ -560,6 +560,10 @@ jobs:
             Write-Error 'install.ps1 must start directly with #Requires'
           }
 
+      - name: Verify native launcher lifecycle
+        shell: powershell
+        run: node --test src/shared/launcher.test.cjs
+
       - name: Configure a provider before fresh installation
         run: node src/ci/provider-startup-fixture.cjs seed
 
