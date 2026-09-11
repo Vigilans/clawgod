@@ -112,12 +112,11 @@ const patches = [
     id: 'custom-alias-env-write',
     toggleable: true,
     name: 'Allow custom alias env vars (BKt write gate, >=2.1.218)',
-    pattern: /function ([\w$]+)\(([\w$]+),([\w$]+)\)\{let ([\w$]+)=\2\.toUpperCase\(\);return ([\w$]+)\.has\(\4\)\|\|([\w$]+)\.has\(\4\)&&([\w$]+)\(\3\)\}/g,
-    replacer: (m, fn, key, val, upper, allow, truthySet, truthyFn) =>
-      `function ${fn}(${key},${val}){let ${upper}=${key}.toUpperCase();` +
-      `return ${allow}.has(${upper})||${truthySet}.has(${upper})&&${truthyFn}(${val})` +
+    pattern: /function ([\w$]+)\(([\w$]+),([\w$]+)\)\{let ([\w$]+)=\2\.toUpperCase\(\);return ([\w$]+)\.has\(\4\)\|\|([\w$]+)\.has\(\4\)&&([\w$]+)\(\3\)(?:\|\|[\w$]+\.has\(\4\)&&[\w$]+\(\3\)\|\|\4==="ANTHROPIC_CUSTOM_HEADERS"&&![\w$]+\(\3\))?\}/g,
+    replacer: (m, fn, key, val, upper) =>
+      m.slice(0, -1) +
       `||${gate('custom-alias-env-write')}&&/^ANTHROPIC_DEFAULT_[A-Z0-9_]+_(?:MODEL|NAME|DESCRIPTION|SUPPORTED_CAPABILITIES)$/.test(${upper})}`,
-    optional: true,  // ≤2.1.217 used the allowlist loop below
+    sentinel: '==="ANTHROPIC_CUSTOM_HEADERS"&&!',
   },
   {
     // ≤2.1.217: project/local settings env passed through a static allowlist
@@ -191,7 +190,7 @@ const patches = [
     pattern: new RegExp(
       'if\\(([\\w$]+)&&!([\\w$]+)\\.some\\(\\(([\\w$]+)\\)=>\\3\\.value===\\1\\)\\)' +
       '\\2\\.push\\(\\{value:\\1,' +
-      'label:(?:process\\.env|[\\w$]+)\\.ANTHROPIC_CUSTOM_MODEL_OPTION_NAME\\?\\?\\1,' +
+      'label:(?:process\\.env|[\\w$]+)\\.ANTHROPIC_CUSTOM_MODEL_OPTION_NAME\\?\\?(?:[\\w$]+\\(\\1\\)\\?\\?)?\\1,' +
       'description:(?:process\\.env|[\\w$]+)\\.ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION\\?\\?' +
       '`Custom model \\(\\$\\{\\1\\}\\)`\\}\\);',
       'g'
@@ -219,6 +218,7 @@ const patches = [
       return m + `if(${gate('custom-alias-picker')}){` + aliasOptions + '}';
     },
     unique: true,
+    sentinel: 'ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION??',
   },
   {
     // Direct `/model <alias>` validates unknown names against the provider before
@@ -226,12 +226,13 @@ const patches = [
     id: 'custom-alias-command',
     toggleable: true,
     name: 'Accept custom aliases in /model command',
-    pattern: /if\(!([\w$]+)\|\|([\w$]+)\(\1\)\)return\{ok:!0,model:\1\};try\{/g,
-    replacer: (m, model, builtInCheck) =>
-      `if(!${model}||${builtInCheck}(${model})||${gate('custom-alias-command')}&&` +
+    pattern: /if\(!([\w$]+)(?:\|\|[\w$]+\(\1\)\)return\{ok:!0,model:\1\};|\)return\{ok:!0,model:\1\};if\([\w$]+\(\1\)\)return\{ok:!0,model:\1\.trim\(\)\.toLowerCase\(\)\};)try\{/g,
+    replacer: (m, model) =>
+      m.slice(0, -4) + `if(${gate('custom-alias-command')}&&` +
       `process.env["ANTHROPIC_DEFAULT_"+${model}.toUpperCase().trim()` +
       `.replace(/-/g,"_")+"_MODEL"])return{ok:!0,model:${model}};try{`,
     unique: true,
+    sentinel: 'Failed to validate model:',
   },
   {
     // Resolve a selected custom alias to its ANTHROPIC_DEFAULT_<ALIAS>_MODEL value
