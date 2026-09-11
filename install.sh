@@ -1095,7 +1095,10 @@ if (isChunked) {
   for (const f of readdirSync(bunfsDir)) {
     if (!f.endsWith('.js') && !f.endsWith('.mjs')) continue;
     const fp = join(bunfsDir, f);
-    let fc = readFileSync(fp, 'utf8');
+    const content = readFileSync(fp);
+    let fc = content.toString('utf8');
+    // File-loader assets can retain a .js name while containing compressed bytes.
+    if (!Buffer.from(fc, 'utf8').equals(content)) continue;
     fc = stripPragma(fc);
     fc = rewriteGraph(fc, fp);
     fc = fixFileURLs(fc);
@@ -3094,7 +3097,11 @@ if (isGraph) {
   files[TARGET] = readFileSync(TARGET, 'utf8');
   for (const f of readdirSync(GRAPH_DIR)) {
     if (!/\.js$/.test(f) && !/\.mjs$/.test(f)) continue;
-    files[join(GRAPH_DIR, f)] = readFileSync(join(GRAPH_DIR, f), 'utf8');
+    const content = readFileSync(join(GRAPH_DIR, f));
+    const text = content.toString('utf8');
+    // Preserve compressed file-loader assets even when their names end in .js.
+    if (!Buffer.from(text, 'utf8').equals(content)) continue;
+    files[join(GRAPH_DIR, f)] = text;
   }
 } else {
   if (!existsSync(TARGET)) {

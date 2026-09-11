@@ -58,7 +58,10 @@ if (isChunked) {
   for (const f of readdirSync(bunfsDir)) {
     if (!f.endsWith('.js') && !f.endsWith('.mjs')) continue;
     const fp = join(bunfsDir, f);
-    let fc = readFileSync(fp, 'utf8');
+    const content = readFileSync(fp);
+    let fc = content.toString('utf8');
+    // File-loader assets can retain a .js name while containing compressed bytes.
+    if (!Buffer.from(fc, 'utf8').equals(content)) continue;
     fc = stripPragma(fc);
     fc = rewriteGraph(fc, fp);
     fc = fixFileURLs(fc);
