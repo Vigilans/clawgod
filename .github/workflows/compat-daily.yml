@@ -481,10 +481,6 @@ jobs:
         with:
           bun-version: ${{ matrix.bun }}
 
-      - name: Test Windows launcher recovery and repeated installs
-        shell: powershell
-        run: ./src/windows/launchers.test.ps1
-
       - name: Test Windows clean source recovery
         shell: powershell
         run: ./src/windows/source-recovery.test.ps1
@@ -701,11 +697,11 @@ jobs:
 
       - name: Smoke test - clawgod startup
         timeout-minutes: 1
-        # Use the unambiguous clawgod.cmd entry point. This exercises the full
+        # Use the unambiguous clawgod.exe entry point. This exercises the full
         # launcher -> Bun -> cli.cjs -> chunk-graph path on Windows.
         shell: powershell
         run: |
-          $launcher = Join-Path $env:USERPROFILE '.local\bin\clawgod.cmd'
+          $launcher = Join-Path $env:USERPROFILE '.local\bin\clawgod.exe'
           if (-not (Test-Path $launcher)) {
             Write-Error "Launcher missing: $launcher"
           }

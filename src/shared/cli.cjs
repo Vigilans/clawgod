@@ -234,7 +234,7 @@ if (featureEnabled('lean-settings') && existsSync(join(clawgodDir, '.lean-max'))
 process.env.DISABLE_INSTALLATION_CHECKS ??= '1';
 // Updates belong to clawgod's `claude update` redirect. The native background
 // updater can repair a missing Windows claude.exe even at the same version,
-// shadowing our claude.cmd. Keep it disabled for every clawgod process (#200).
+// replacing our compiled launcher. Keep it disabled for every clawgod process (#200).
 process.env.DISABLE_AUTOUPDATER = '1';
 // Use system ripgrep (extracted vendor rg path was build-time-baked; system
 // rg is the most reliable fallback under Bun runtime).
