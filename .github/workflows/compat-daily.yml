@@ -433,6 +433,10 @@ jobs:
             Write-Error 'install.ps1 must start directly with #Requires'
           }
 
+      - name: Verify native launcher lifecycle
+        shell: powershell
+        run: node --test src/shared/launcher.test.cjs
+
       - name: Run install.ps1 through Invoke-Expression (npm-fallback path)
         # Use Windows PowerShell 5.1 and evaluate the installer as a decoded
         # string, matching the documented `irm ... | iex` parser path.
