@@ -489,11 +489,11 @@ jobs:
           }
 
       - name: Smoke test - clawgod startup
-        # Use the unambiguous clawgod.cmd entry point. This exercises the full
+        # Use the unambiguous clawgod.exe entry point. This exercises the full
         # launcher -> Bun -> cli.cjs -> chunk-graph path on Windows.
         shell: powershell
         run: |
-          $launcher = Join-Path $env:USERPROFILE '.local\bin\clawgod.cmd'
+          $launcher = Join-Path $env:USERPROFILE '.local\bin\clawgod.exe'
           if (-not (Test-Path $launcher)) {
             Write-Error "Launcher missing: $launcher"
           }

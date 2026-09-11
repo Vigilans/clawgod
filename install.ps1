@@ -59,6 +59,14 @@ if ($Uninstall) {
         Remove-Item -Force $claudeCmd
         Write-OK "Removed ClawGod launcher ($claudeCmd)"
     }
+    foreach ($name in @("claude.exe", "clawgod.exe")) {
+        $launcher = Join-Path $BinDir $name
+        if ((Test-Path $launcher) -and (Get-Item $launcher).VersionInfo.FileDescription -eq "ClawGod launcher") {
+            $retired = Join-Path $env:TEMP ("clawgod-uninstall-" + [Guid]::NewGuid().ToString('N') + ".exe")
+            Move-Item $launcher $retired
+            Remove-Item $retired -Force -ErrorAction SilentlyContinue
+        }
+    }
     # Also check for .exe backup
     $claudeExeOrig = Join-Path $BinDir "claude.orig.exe"
     $claudeExe     = Join-Path $BinDir "claude.exe"
@@ -1283,11 +1291,6 @@ if (isChunked) {
 if (-not (Test-Path (Join-Path $ClawDir "cli.original.cjs"))) {
     Write-Err "Post-process failed"
     exit 1
-}
-
-# If we pulled the binary from npm into a tmpdir, clean it up now.
-if ($NativeBinTmpDir -and (Test-Path $NativeBinTmpDir)) {
-    Remove-Item -Recurse -Force $NativeBinTmpDir -ErrorAction SilentlyContinue
 }
 
 Write-OK "cli.original.cjs ready ($NativeBinLabel)"
@@ -3562,22 +3565,6 @@ Write-OK "Bun loads cli.original.cjs"
 
 # --- Replace claude command -------------------------------------------
 
-# Build launcher content using %USERPROFILE% env var where possible to avoid
-# encoding issues when the profile path contains non-ASCII characters (e.g.
-# Chinese/Korean/Japanese usernames). cmd.exe resolves %USERPROFILE% at
-# runtime so no problematic characters need to be baked into the .cmd file.
-$normalizedUserProfile = $env:USERPROFILE.TrimEnd('\', '/')
-$normalizedBunBin = $BunBin.TrimEnd('\', '/')
-$userProfilePrefix = "$normalizedUserProfile\"
-if ($normalizedBunBin.Equals($normalizedUserProfile, [StringComparison]::OrdinalIgnoreCase) -or
-    $normalizedBunBin.StartsWith($userProfilePrefix, [StringComparison]::OrdinalIgnoreCase)) {
-    $bunRelative = $normalizedBunBin.Substring($normalizedUserProfile.Length).TrimStart('\', '/')
-    $bunPathInCmd = "%USERPROFILE%\$bunRelative"
-} else {
-    # Bun outside USERPROFILE (e.g. system-wide install) -- fall back to
-    # absolute path since %USERPROFILE%-relative expansion doesn't apply.
-    $bunPathInCmd = $BunBin
-}
 # Download clawgod-import binary
 $importBin = Join-Path $ClawDir "clawgod-import.exe"
 if (-not (Test-Path $importBin)) {
@@ -3590,24 +3577,8 @@ if (-not (Test-Path $importBin)) {
     }
 }
 
-$clawPathInCmd = $ClawDir.Replace('%', '%%')
-$launcherContent = @"
-@echo off
-setlocal DisableDelayedExpansion
-for /f "tokens=2 delims=:" %%C in ('chcp') do set "_CLAWGOD_CODEPAGE=%%C"
-chcp 65001 >nul
-set "CLAWGOD_DIR=$clawPathInCmd"
-set "CLAUDE_CODE_EXECPATH=%~dp0claude.orig.exe"
-"$bunPathInCmd" "%CLAWGOD_DIR%\cli.cjs" %*
-set "_CLAWGOD_EXIT=%ERRORLEVEL%"
-chcp %_CLAWGOD_CODEPAGE% >nul
-exit /b %_CLAWGOD_EXIT%
-"@
-$launcherContent = $launcherContent -replace '\r?\n', "`r`n"
-
 # Find and back up original claude
 $claudeCmd = Join-Path $BinDir "claude.cmd"
-$claudeExe = Join-Path $BinDir "claude.exe"
 $claudeOrigCmd = Join-Path $BinDir "claude.orig.cmd"
 $claudeOrigExe = Join-Path $BinDir "claude.orig.exe"
 
@@ -3621,13 +3592,15 @@ foreach ($loc in @(
 )) {
     if (Test-Path $loc) {
         # Back up .exe if exists and not already backed up
-        if ($loc -like "*.exe" -and -not (Test-Path $claudeOrigExe)) {
+        if ($loc -like "*.exe" -and -not (Test-Path $claudeOrigExe) -and
+            (Get-Item $loc).VersionInfo.FileDescription -ne "ClawGod launcher") {
             Copy-Item $loc $claudeOrigExe -Force
             Write-OK "Original claude.exe backed up -> claude.orig.exe"
             $originalFound = $true
         }
         # Back up .cmd if exists and not already backed up
-        if ($loc -like "*.cmd" -and -not (Test-Path $claudeOrigCmd)) {
+        if ($loc -like "*.cmd" -and -not (Test-Path $claudeOrigCmd) -and
+            -not (Select-String -Path $loc -Pattern "clawgod" -Quiet)) {
             Copy-Item $loc $claudeOrigCmd -Force
             Write-OK "Original claude.cmd backed up -> claude.orig.cmd"
             $originalFound = $true
@@ -3645,41 +3618,77 @@ foreach ($loc in @(
     }
 }
 
-# Clean up leftover timestamped/old exes from previous installs
-Get-ChildItem $BinDir -Filter "claude.*.exe" -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -ne "claude.orig.exe" } |
-    ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue }
+if (-not (Test-Path $claudeOrigExe)) {
+    if (-not $NativeBin -or -not (Test-Path $NativeBin)) {
+        throw "Native Claude backup missing. Run a full install without -NoUpgrade."
+    }
+    Copy-Item $NativeBin $claudeOrigExe
+    Write-OK "Native Claude backed up -> claude.orig.exe"
+}
 
-# Remove claude.exe so .cmd takes precedence
-# Keep one backup as claude.orig.exe, discard the rest
-if (Test-Path $claudeExe) {
-    if (-not (Test-Path $claudeOrigExe)) {
-        Rename-Item $claudeExe $claudeOrigExe -Force
-        Write-OK "Renamed claude.exe -> claude.orig.exe"
-    } else {
-        # Backup already exists -- just remove the new claude.exe
-        try {
-            Remove-Item -Force $claudeExe
-        } catch {
-            # File locked (running process) -- rename aside with timestamp
-            $ts = Get-Date -Format "yyyyMMddHHmmss"
-            Rename-Item $claudeExe "claude.$ts.exe" -Force -ErrorAction SilentlyContinue
+# --- Build and publish native launchers --------------------------------
+
+$launcherStage = Join-Path $BinDir (".clawgod-launcher-" + [Guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $launcherStage | Out-Null
+$launcherSource = @'
+const directory = __CLAWGOD_DIR__;
+process.env.CLAWGOD_DIR = directory;
+process.env.CLAUDE_CODE_EXECPATH = __CLAUDE_ORIG__;
+Object.defineProperty(process, 'execPath', {value: __BUN_BIN__, configurable: true});
+require(require('node:path').join(directory, 'cli.cjs'));
+'@
+$launcherSource = $launcherSource.Replace('__CLAWGOD_DIR__', ($ClawDir | ConvertTo-Json -Compress))
+$launcherSource = $launcherSource.Replace('__CLAUDE_ORIG__', ($claudeOrigExe | ConvertTo-Json -Compress))
+$launcherSource = $launcherSource.Replace('__BUN_BIN__', ($BunBin | ConvertTo-Json -Compress))
+$launcherScript = Join-Path $launcherStage 'launcher.cjs'
+[System.IO.File]::WriteAllText($launcherScript, $launcherSource, (New-Object System.Text.UTF8Encoding $false))
+$stagedExe = Join-Path $launcherStage 'claude.exe'
+$published = @()
+$installed = $false
+try {
+    & $BunBin build --compile $launcherScript --outfile $stagedExe --windows-description "ClawGod launcher"
+    if ($LASTEXITCODE -ne 0) { throw "Native launcher compilation failed" }
+    $previousErrorAction = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        foreach ($arg in @('--version', '--help')) {
+            $output = (& $stagedExe $arg 2>&1 | Out-String)
+            if ($LASTEXITCODE -ne 0) { throw "Native launcher $arg failed: $output" }
+            if ($arg -eq '--version' -and -not (($output -split '\r?\n') -contains "$NativeBinLabel (Claude Code)")) {
+                throw "Native launcher reported an unexpected version: $output"
+            }
         }
-        Write-OK "Removed claude.exe (.cmd now takes priority)"
+    } finally { $ErrorActionPreference = $previousErrorAction }
+    if ((Get-Item $stagedExe).VersionInfo.FileDescription -ne "ClawGod launcher") {
+        throw "Native launcher identification missing"
+    }
+    New-Item -ItemType HardLink -Path (Join-Path $launcherStage 'clawgod.exe') -Target $stagedExe | Out-Null
+    foreach ($name in @('claude.exe', 'clawgod.exe', 'claude.cmd', 'clawgod.cmd')) {
+        $target = Join-Path $BinDir $name
+        if (Test-Path $target) { Move-Item $target (Join-Path $launcherStage ("old-" + $name)) }
+    }
+    foreach ($name in @('claude.exe', 'clawgod.exe')) {
+        Move-Item (Join-Path $launcherStage $name) (Join-Path $BinDir $name)
+        $published += $name
+    }
+    $installed = $true
+} catch {
+    foreach ($name in $published) {
+        Move-Item (Join-Path $BinDir $name) (Join-Path $launcherStage $name)
+    }
+    foreach ($name in @('claude.exe', 'clawgod.exe', 'claude.cmd', 'clawgod.cmd')) {
+        $previous = Join-Path $launcherStage ("old-" + $name)
+        if (Test-Path $previous) { Move-Item $previous (Join-Path $BinDir $name) }
+    }
+    throw
+} finally {
+    if ($installed) { Remove-Item -Recurse -Force $launcherStage -ErrorAction SilentlyContinue }
+    if (Test-Path $launcherStage) { Write-Dim "Launcher staging files retained: $launcherStage" }
+    if ($NativeBinTmpDir -and (Test-Path $NativeBinTmpDir)) {
+        Remove-Item -Recurse -Force $NativeBinTmpDir -ErrorAction SilentlyContinue
     }
 }
-
-
-# Write .cmd launcher for both 'claude' and the explicit 'clawgod' alias.
-# Why both:
-#  - claude.cmd may be shadowed by a claude.exe higher in PATH
-#  - clawgod.cmd has no .exe competitor, so it always works
-#  - User can invoke patched explicitly via `clawgod` regardless of which
-#    binary 'claude' resolves to
-foreach ($cmd in @("claude", "clawgod")) {
-    [System.IO.File]::WriteAllText((Join-Path $BinDir "$cmd.cmd"), $launcherContent, (New-Object System.Text.UTF8Encoding $false))
-}
-Write-OK "Commands 'claude' + 'clawgod' -> patched"
+Write-OK "Commands 'claude.exe' + 'clawgod.exe' -> patched"
 
 # --- Ensure BinDir is in PATH -----------------------------------------
 
