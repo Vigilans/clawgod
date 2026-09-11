@@ -578,7 +578,7 @@ const patches = [
     id: 'ultraplan',
     toggleable: true,
     name: 'Ultraplan enable',
-    pattern: /(name:"ultraplan",[\s\S]{1,500}?argumentHint:"<prompt>",isEnabled:\(\)=>)(!1|[\w$]+\(\))/g,
+    pattern: /(name:"ultraplan",[\s\S]{1,500}?argumentHint:"<prompt>",(?:availability:\["claude-ai"\],)?isEnabled:\(\)=>)(!1|[\w$]+\(\))/g,
     replacer: (m, prefix, orig) => `${prefix}(${gate('ultraplan')}?!0:${orig})`,
     sentinel: 'name:"ultraplan"',
   },
