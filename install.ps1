@@ -2891,7 +2891,7 @@ const patches = [
       '\\2\\.push\\(\\{value:\\1,' +
       'label:(?:process\\.env|[\\w$]+)\\.ANTHROPIC_CUSTOM_MODEL_OPTION_NAME\\?\\?(?:[\\w$]+\\(\\1\\)\\?\\?)?\\1,' +
       'description:(?:process\\.env|[\\w$]+)\\.ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION\\?\\?' +
-      '`Custom model \\(\\$\\{\\1\\}\\)`\\}\\);',
+      '`Custom model \\(\\$\\{\\1\\}\\)`(?:,sessionTail:!0)?\\}\\);',
       'g'
     ),
     replacer: (m, customModel, options, option) => {
