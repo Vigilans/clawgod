@@ -3008,14 +3008,11 @@ const patches = [
     id: 'hook-input-marker',
     name: 'Declare PreToolUse updatedInput origin marker',
     pattern: new RegExp(
-      'let ([\\w$]+)=!1,([\\w$]+),([\\w$]+),([\\w$]+)=\\[\\],' +
-      '([\\w$]+)=Date\\.now\\(\\);for await\\(let ([\\w$]+) of ([\\w$]+)\\(',
+      '((?:\\blet |,)[\\w$]+=!1,[\\w$]+,[\\w$]+,[\\w$]+=\\[\\],)' +
+      '(?=[\\w$]+=Date\\.now\\(\\);for await\\(let [\\w$]+ of [\\w$]+\\()',
       'g'
     ),
-    replacer: (m, stopped, stopReason, hookDecision, durations, startedAt, result, runHooks) =>
-      `let ${stopped}=!1,${stopReason},${hookDecision},${durations}=[],` +
-      `_cgHookInput,${startedAt}=Date.now();` +
-      `for await(let ${result} of ${runHooks}(`,
+    replacer: (m, declarations) => declarations + '_cgHookInput,',
     validate: (_, code) =>
       code.includes('The permission handler returned updatedInput for '),
     unique: true,
