@@ -187,3 +187,25 @@ for (const enabled of [false,true]) {
   assert.equal(result.model.values.includes('custom'),enabled);
 }
 console.log('[model-patches.test] expression-based Agent model descriptions ok');
+
+for (const prefix of ['let ', 'let messages=[],{observableInput:observed,callInput:called}=prepared,context={...base},']) {
+  const fixture = 'async function run(tool,result){let input={model:"opus"};' + prefix +
+    'stopped=!1,reason,decision,durations=[],started=Date.now();for await(let event of hooks(result))switch(event.type){' +
+    'case"hookPermissionResult":decision=event.hookPermissionResult;break;case"hookUpdatedInput":input=event.updatedInput;break;case"preventContinuation":stopped=event.shouldPreventContinuation;break;}' +
+    'decision=permission(decision??{updatedInput:input});if(decision.updatedInput!==void 0&&!empty(decision.updatedInput)){let parsed=validate(tool.inputSchema,decision.updatedInput);if(parsed!==null)throw Error("The permission handler returned updatedInput for "+tool.name)}return decision.updatedInput}';
+  const patched = ['hook-input-marker', 'hook-input-origin', 'hook-permission-validation'].reduce((code, id) => apply(id, code), fixture);
+  for (const enabled of [false, true]) for (const name of ['Agent', 'Bash']) for (const type of ['hookPermissionResult', 'hookUpdatedInput']) for (const changed of [false, true]) {
+    let calls = 0;
+    const result = await runInNewContext(patched + ';run(tool,result)', {
+      __clawgodPatches: { 'hook-input-origin': enabled, 'hook-permission-validation': enabled },
+      tool: {name, inputSchema: {}}, result: {model: 'hook-model'},
+      prepared: {observableInput: {}, callInput: {}}, base: {},
+      hooks: async function*(input) { yield {type, updatedInput: input, hookPermissionResult: {updatedInput: input}}; },
+      permission: decision => ({updatedInput: {...decision.updatedInput, ...(changed ? {model: 'permission-model'} : {})}}),
+      empty: () => false, validate: () => { calls++; return null; },
+    });
+    assert.equal(calls, enabled && name === 'Agent' && !changed ? 0 : 1);
+    assert.equal(result.model, changed ? 'permission-model' : 'hook-model');
+  }
+}
+console.log('[model-patches.test] standalone and merged hook declarations preserve input provenance');
