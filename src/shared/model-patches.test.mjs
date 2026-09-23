@@ -119,9 +119,9 @@ for (const enabled of [false, true]) {
   }
 }
 
-for (const envObject of ['process.env', 'env']) for (const label of ['custom', 'display(custom)??custom']) {
+for (const envObject of ['process.env', 'env']) for (const label of ['custom', 'display(custom)??custom']) for (const tail of ['', ',sessionTail:!0']) {
   const picker = apply('custom-alias-picker',
-    `if(custom&&!options.some((option)=>option.value===custom))options.push({value:custom,label:${envObject}.ANTHROPIC_CUSTOM_MODEL_OPTION_NAME??${label},description:${envObject}.ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION??\`Custom model (\${custom})\`});`);
+    `if(custom&&!options.some((option)=>option.value===custom))options.push({value:custom,label:${envObject}.ANTHROPIC_CUSTOM_MODEL_OPTION_NAME??${label},description:${envObject}.ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION??\`Custom model (\${custom})\`${tail}});`);
   for (const enabled of [false, true]) for (const custom of [undefined, 'native-model']) {
     const env = {
       ANTHROPIC_DEFAULT_CUSTOM_MODEL: 'provider-model',
@@ -138,7 +138,10 @@ for (const envObject of ['process.env', 'env']) for (const label of ['custom', '
     runInNewContext(picker, context);
     runInNewContext(picker, context);
     assert.equal(options.length, 1 + (custom ? 1 : 0) + (enabled ? 2 : 0));
-    if (custom) assert.equal(options.find(option => option.value === custom).label, label.includes('display') ? 'Native display' : custom);
+    if (custom) {
+      assert.equal(options.find(option => option.value === custom).label, label.includes('display') ? 'Native display' : custom);
+      assert.equal(options.find(option => option.value === custom).sessionTail, tail ? true : undefined);
+    }
     if (enabled) {
       assert.equal(options.find(option => option.value === 'custom').label, 'provider-model');
       assert.equal(options.find(option => option.value === 'custom').description, 'Custom Display name model');
