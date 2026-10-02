@@ -87,3 +87,24 @@ for(raw of ['"text"','7','true','[]','null','invalid','',undefined]) {
   assert.equal(client.getEnvironmentOverrides(),null);
 }
 console.log('[version-gates.test] compact getter handles config changes, reset, disabled reads and invalid values');
+
+for (const condition of [
+  'provider!=="firstParty"&&provider!=="anthropicAws"',
+  'provider!=="firstParty"&&provider!=="anthropicAws"&&(model==="claude-opus-4-6"||model==="claude-sonnet-4-6"||model.includes("haiku"))',
+  'provider!=="firstParty"&&!aws(provider)&&(model==="claude-opus-4-6"||model==="claude-sonnet-4-6"||model.includes("haiku"))',
+  'thirdParty()&&(model==="claude-opus-4-6"||model==="claude-sonnet-4-6"||model.includes("haiku"))',
+]) {
+  const fixture = 'function thirdParty(){return provider!=="firstParty"&&!aws(provider)}' +
+    `function supported(model){if(blocked(model))return!1;if(${condition})return!1;return!0}`;
+  const patched = apply('auto-mode-inline-gate', fixture);
+  for (const enabled of [false, true]) for (const provider of ['firstParty', 'anthropicAws', 'bedrock']) for (const model of ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5', 'custom-model']) {
+    const context = {
+      __clawgodPatches: {'auto-mode-inline-gate': enabled}, provider, model,
+      aws: value => value === 'anthropicAws', blocked: value => value === 'claude-opus-4-6',
+    };
+    const native = runInNewContext(fixture + ';supported(model)', context);
+    assert.equal(runInNewContext(patched + ';supported(model)', context), enabled ? model !== 'claude-opus-4-6' : native);
+    assert.equal(runInNewContext(patched + ';thirdParty()', context), provider === 'bedrock');
+  }
+}
+console.log('[version-gates.test] auto-mode inline and extracted provider checks retain unrelated restrictions');
