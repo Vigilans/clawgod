@@ -49,20 +49,45 @@ echo ""
 echo -e "${BOLD}  ClawGod Installer${NC}"
 echo ""
 
+# ─── Feature configuration (also used during uninstall) ──────────────
+
+if ! command -v node &>/dev/null; then
+  warn "Node.js is required (>= 18) for the patcher. Install from https://nodejs.org"
+  exit 1
+fi
+
+NODE_VERSION=$(node -e "console.log(process.versions.node.split('.')[0])")
+if [ "$NODE_VERSION" -lt 18 ]; then
+  warn "Node.js >= 18 required (found v$NODE_VERSION)"
+  exit 1
+fi
+
+mkdir -p "$CLAWGOD_DIR"
+cat > "$CLAWGOD_DIR/feature-gates.cjs" << 'GATES_EOF'
+{{CLAWGOD:feature-gates.cjs}}
+GATES_EOF
+
+node "$CLAWGOD_DIR/feature-gates.cjs" --check
+cap_enabled() {
+  [ "$(node "$CLAWGOD_DIR/feature-gates.cjs" --enabled "$1")" = "1" ]
+}
+MANAGE_CLAUDE_COMMAND=$(node "$CLAWGOD_DIR/feature-gates.cjs" --enabled claude-command)
+
 # ─── Uninstall ─────────────────────────────────────────
 
 if [ "$UNINSTALL" = "1" ]; then
-  CLAUDE_BIN=$(command -v claude 2>/dev/null || true)
+  CLAUDE_BIN=""
+  if [ "$MANAGE_CLAUDE_COMMAND" = "1" ]; then CLAUDE_BIN=$(command -v claude 2>/dev/null || true); fi
   LAST_DIR=""
   for DIR in "${CLAUDE_BIN:+$(dirname "$CLAUDE_BIN")}" "$BIN_DIR"; do
     [ -z "$DIR" ] && continue
     [ "$DIR" = "$LAST_DIR" ] && continue
     LAST_DIR=$DIR
-    if [ -e "$DIR/claude.orig" ]; then
+    if [ "$MANAGE_CLAUDE_COMMAND" = "1" ] && [ -e "$DIR/claude.orig" ]; then
       # Has backup — restore it
       mv "$DIR/claude.orig" "$DIR/claude"
       info "Original claude restored ($DIR/claude)"
-    elif [ -f "$DIR/claude" ] && grep -q "clawgod" "$DIR/claude" 2>/dev/null; then
+    elif [ "$MANAGE_CLAUDE_COMMAND" = "1" ] && [ -f "$DIR/claude" ] && grep -q "clawgod" "$DIR/claude" 2>/dev/null; then
       # Our launcher, no backup — remove it (otherwise it points to deleted cli.js)
       rm -f "$DIR/claude"
       info "Removed ClawGod launcher ($DIR/claude)"
@@ -83,17 +108,6 @@ if [ "$UNINSTALL" = "1" ]; then
 fi
 
 # ─── Prerequisites ─────────────────────────────────────
-
-if ! command -v node &>/dev/null; then
-  warn "Node.js is required (>= 18) for the patcher. Install from https://nodejs.org"
-  exit 1
-fi
-
-NODE_VERSION=$(node -e "console.log(process.versions.node.split('.')[0])")
-if [ "$NODE_VERSION" -lt 18 ]; then
-  warn "Node.js >= 18 required (found v$NODE_VERSION)"
-  exit 1
-fi
 
 # ─── Ensure Bun (runtime that executes the patched cli.js) ─────────────
 
@@ -163,19 +177,6 @@ if ! command -v rg &>/dev/null; then
   exit 1
 fi
 info "ripgrep: $(rg --version | head -1)"
-
-mkdir -p "$CLAWGOD_DIR" "$BIN_DIR"
-# ─── Write patch feature gates ────────────────────────────────
-
-cat > "$CLAWGOD_DIR/feature-gates.cjs" << 'GATES_EOF'
-{{CLAWGOD:feature-gates.cjs}}
-GATES_EOF
-info "Patch feature gates created (feature-gates.cjs)"
-
-node "$CLAWGOD_DIR/feature-gates.cjs" --check
-cap_enabled() {
-  [ "$(node "$CLAWGOD_DIR/feature-gates.cjs" --enabled "$1")" = "1" ]
-}
 
 # ─── Handle --no-upgrade (re-patch the installed version) ───────────
 mkdir -p "$CLAWGOD_DIR" "$BIN_DIR"
@@ -361,10 +362,6 @@ fi
 [ -f "$CLAWGOD_DIR/cli.original.cjs" ] || { warn "Post-process failed"; exit 1; }
 
 # If we pulled the binary from npm into a tmpdir, clean it up now.
-if [ -n "$NATIVE_BIN_TMPDIR" ]; then
-  rm -rf "$NATIVE_BIN_TMPDIR"
-fi
-
 info "cli.original.cjs ready ($NATIVE_BIN_LABEL)"
 
 fi  # end --no-upgrade skip
@@ -590,7 +587,8 @@ info "Bun loads cli.original.cjs"
 # `command -v` is a POSIX builtin (works even on minimal images that no
 # longer ship `which`); `|| true` keeps a clean miss from tripping
 # `set -e` via the assignment's exit status under bash 5+.
-CLAUDE_BIN=$(command -v claude 2>/dev/null || true)
+CLAUDE_BIN="$BIN_DIR/claude"
+if [ "$MANAGE_CLAUDE_COMMAND" = "1" ]; then CLAUDE_BIN=$(command -v claude 2>/dev/null || true); fi
 if [ -z "$CLAUDE_BIN" ]; then
   # No claude in PATH — use default location
   CLAUDE_BIN="$BIN_DIR/claude"
@@ -660,12 +658,12 @@ exec \"\$BUN_BIN\" \"\$CLAWGOD_CLI\" \"\$@\""
 
 # Back up original claude (only once)
 if [ ! -e "$CLAUDE_BIN.orig" ]; then
-  if [ -L "$CLAUDE_BIN" ]; then
+  if [ "$MANAGE_CLAUDE_COMMAND" = "1" ] && [ -L "$CLAUDE_BIN" ]; then
     # Symlink (native install) — preserve target
-    NATIVE_BIN="$(readlink "$CLAUDE_BIN")"
-    ln -sf "$NATIVE_BIN" "$CLAUDE_BIN.orig"
-    info "Original claude backed up → claude.orig (→ $NATIVE_BIN)"
-  elif [ -f "$CLAUDE_BIN" ] && file "$CLAUDE_BIN" 2>/dev/null | grep -q "Mach-O\|ELF\|script"; then
+    ORIGINAL_BIN="$(readlink "$CLAUDE_BIN")"
+    ln -sf "$ORIGINAL_BIN" "$CLAUDE_BIN.orig"
+    info "Original claude backed up → claude.orig (→ $ORIGINAL_BIN)"
+  elif [ "$MANAGE_CLAUDE_COMMAND" = "1" ] && [ -f "$CLAUDE_BIN" ] && file "$CLAUDE_BIN" 2>/dev/null | grep -q "Mach-O\|ELF\|script"; then
     # Binary or script (pnpm/npm global install)
     cp "$CLAUDE_BIN" "$CLAUDE_BIN.orig"
     info "Original claude backed up → claude.orig"
@@ -673,15 +671,21 @@ if [ ! -e "$CLAUDE_BIN.orig" ]; then
     # Try versions dir as fallback
     VERSIONS_DIR="$HOME/.local/share/claude/versions"
     if [ -d "$VERSIONS_DIR" ]; then
-      NATIVE_BIN="$(ls -t "$VERSIONS_DIR"/* 2>/dev/null | while read f; do
+      ORIGINAL_BIN="$(ls -t "$VERSIONS_DIR"/* 2>/dev/null | while read f; do
         file "$f" 2>/dev/null | grep -q "Mach-O\|ELF" && echo "$f" && break
       done)" || true
-      if [ -n "$NATIVE_BIN" ]; then
-        ln -sf "$NATIVE_BIN" "$CLAUDE_BIN.orig"
-        info "Original claude backed up → claude.orig (→ $NATIVE_BIN)"
+      if [ -n "$ORIGINAL_BIN" ]; then
+        ln -sf "$ORIGINAL_BIN" "$CLAUDE_BIN.orig"
+        info "Original claude backed up → claude.orig (→ $ORIGINAL_BIN)"
       fi
     fi
   fi
+fi
+
+# A separately managed command is not a native backup source.
+if [ ! -e "$CLAUDE_BIN.orig" ] && [ -f "${NATIVE_BIN:-}" ]; then
+  cp "$NATIVE_BIN" "$CLAUDE_BIN.orig"
+  chmod +x "$CLAUDE_BIN.orig"
 fi
 
 # Write launcher to the SAME directory where claude was found.
@@ -699,11 +703,13 @@ write_launcher() {
   chmod +x "$target"
 }
 
-write_launcher "$CLAUDE_BIN"
-info "Command 'claude' → patched ($CLAUDE_BIN)"
+if [ "$MANAGE_CLAUDE_COMMAND" = "1" ]; then
+  write_launcher "$CLAUDE_BIN"
+  info "Command 'claude' → patched ($CLAUDE_BIN)"
+fi
 
 # Also install to ~/.local/bin if claude was elsewhere (ensures PATH consistency)
-if [ "$CLAUDE_DIR" != "$BIN_DIR" ]; then
+if [ "$MANAGE_CLAUDE_COMMAND" = "1" ] && [ "$CLAUDE_DIR" != "$BIN_DIR" ]; then
   write_launcher "$BIN_DIR/claude"
   dim "Also installed to $BIN_DIR/claude"
 fi
@@ -715,6 +721,10 @@ fi
 #  - User restored claude.orig via uninstall but still wants the patched one
 write_launcher "$BIN_DIR/clawgod"
 info "Command 'clawgod' → patched ($BIN_DIR/clawgod)"
+
+if [ -n "${NATIVE_BIN_TMPDIR:-}" ]; then
+  rm -rf "$NATIVE_BIN_TMPDIR"
+fi
 
 # ─── Check PATH ───────────────────────────────────────
 

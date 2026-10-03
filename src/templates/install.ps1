@@ -46,20 +46,46 @@ Write-Host "  ClawGod Installer" -ForegroundColor White -NoNewline
 Write-Host " (Windows)" -ForegroundColor DarkGray
 Write-Host ""
 
+# --- Feature configuration (also used during uninstall) ----------------
+
+try { $null = Get-Command node -ErrorAction Stop }
+catch {
+    Write-Err "Node.js is required (>= 18) for the patcher. Install from https://nodejs.org"
+    exit 1
+}
+$nodeVer = [int](node -e "console.log(process.versions.node.split('.')[0])")
+if ($nodeVer -lt 18) {
+    Write-Err "Node.js >= 18 required (found v$nodeVer)"
+    exit 1
+}
+New-Item -ItemType Directory -Force -Path $ClawDir | Out-Null
+@'
+{{CLAWGOD:feature-gates.cjs}}
+'@ | Set-Content (Join-Path $ClawDir "feature-gates.cjs") -Encoding UTF8
+& node (Join-Path $ClawDir "feature-gates.cjs") --check
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+function Test-FeatureEnabled([string]$Name) {
+    $value = & node (Join-Path $ClawDir "feature-gates.cjs") --enabled $Name
+    if ($LASTEXITCODE -ne 0) { throw "Could not read feature configuration" }
+    return $value -eq "1"
+}
+
 # --- Uninstall --------------------------------------------------------
 
 if ($Uninstall) {
+    $manageClaude = Test-FeatureEnabled "claude-command"
     # Restore original claude
     $claudeOrig = Join-Path $BinDir "claude.orig.cmd"
     $claudeCmd  = Join-Path $BinDir "claude.cmd"
-    if (Test-Path $claudeOrig) {
+    if ($manageClaude -and (Test-Path $claudeOrig)) {
         Move-Item -Force $claudeOrig $claudeCmd
         Write-OK "Original claude restored"
-    } elseif ((Test-Path $claudeCmd) -and (Select-String -Path $claudeCmd -Pattern "clawgod" -Quiet -ErrorAction SilentlyContinue)) {
+    } elseif ($manageClaude -and (Test-Path $claudeCmd) -and (Select-String -Path $claudeCmd -Pattern "clawgod" -Quiet -ErrorAction SilentlyContinue)) {
         Remove-Item -Force $claudeCmd
         Write-OK "Removed ClawGod launcher ($claudeCmd)"
     }
     foreach ($name in @("claude.exe", "clawgod.exe")) {
+        if ($name -eq 'claude.exe' -and -not $manageClaude) { continue }
         $launcher = Join-Path $BinDir $name
         if ((Test-Path $launcher) -and (Get-Item $launcher).VersionInfo.FileDescription -eq "ClawGod launcher") {
             $retired = Join-Path $env:TEMP ("clawgod-uninstall-" + [Guid]::NewGuid().ToString('N') + ".exe")
@@ -70,7 +96,7 @@ if ($Uninstall) {
     # Also check for .exe backup
     $claudeExeOrig = Join-Path $BinDir "claude.orig.exe"
     $claudeExe     = Join-Path $BinDir "claude.exe"
-    if (Test-Path $claudeExeOrig) {
+    if ($manageClaude -and (Test-Path $claudeExeOrig)) {
         Move-Item -Force $claudeExeOrig $claudeExe
         Write-OK "Original claude.exe restored"
     }
@@ -93,18 +119,6 @@ if ($Uninstall) {
 }
 
 # --- Prerequisites ----------------------------------------------------
-
-try { $null = Get-Command node -ErrorAction Stop }
-catch {
-    Write-Err "Node.js is required (>= 18) for the patcher. Install from https://nodejs.org"
-    exit 1
-}
-
-$nodeVer = [int](node -e "console.log(process.versions.node.split('.')[0])")
-if ($nodeVer -lt 18) {
-    Write-Err "Node.js >= 18 required (found v$nodeVer)"
-    exit 1
-}
 
 # --- Ensure Bun (runtime that executes the patched cli.js) ------------
 
@@ -222,22 +236,6 @@ catch {
     Write-Err ""
     Write-Err "  Re-run this script after installing rg."
     exit 1
-}
-
-New-Item -ItemType Directory -Force -Path $ClawDir | Out-Null
-# --- Write patch feature gates -----------------------------------------
-
-@'
-{{CLAWGOD:feature-gates.cjs}}
-'@ | Set-Content (Join-Path $ClawDir "feature-gates.cjs") -Encoding UTF8
-Write-OK "Patch feature gates created (feature-gates.cjs)"
-
-& node (Join-Path $ClawDir "feature-gates.cjs") --check
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-function Test-FeatureEnabled([string]$Name) {
-    $value = & node (Join-Path $ClawDir "feature-gates.cjs") --enabled $Name
-    if ($LASTEXITCODE -ne 0) { throw "Could not read feature configuration" }
-    return $value -eq "1"
 }
 
 # --- Handle -NoUpgrade (re-patch the installed version) --------------
@@ -692,6 +690,7 @@ if (-not (Test-Path $importBin)) {
 }
 
 # Find and back up original claude
+$manageClaude = Test-FeatureEnabled "claude-command"
 $claudeCmd = Join-Path $BinDir "claude.cmd"
 $claudeOrigCmd = Join-Path $BinDir "claude.orig.cmd"
 $claudeOrigExe = Join-Path $BinDir "claude.orig.exe"
@@ -704,6 +703,7 @@ foreach ($loc in @(
     (Join-Path $env:USERPROFILE ".local\share\claude\versions"),
     (Join-Path $env:LOCALAPPDATA "Programs\claude-code")
 )) {
+    if (-not $manageClaude -and $loc -in @((Join-Path $BinDir "claude.exe"), $claudeCmd)) { continue }
     if (Test-Path $loc) {
         # Reinstalling must not back up our own launcher as the original.
         # Continue searching versions/ if no native executable was found yet.
@@ -761,7 +761,13 @@ $launcherSource = $launcherSource.Replace('__CLAUDE_ORIG__', ($claudeOrigExe | C
 $launcherSource = $launcherSource.Replace('__BUN_BIN__', ($BunBin | ConvertTo-Json -Compress))
 $launcherScript = Join-Path $launcherStage 'launcher.cjs'
 [System.IO.File]::WriteAllText($launcherScript, $launcherSource, (New-Object System.Text.UTF8Encoding $false))
-$stagedExe = Join-Path $launcherStage 'claude.exe'
+$stagedExe = Join-Path $launcherStage 'clawgod.exe'
+$launcherNames = @('clawgod.exe')
+$retiredNames = @('clawgod.exe', 'clawgod.cmd')
+if ($manageClaude) {
+    $launcherNames += 'claude.exe'
+    $retiredNames += @('claude.exe', 'claude.cmd')
+}
 $published = @()
 $installed = $false
 try {
@@ -781,12 +787,12 @@ try {
     if ((Get-Item $stagedExe).VersionInfo.FileDescription -ne "ClawGod launcher") {
         throw "Native launcher identification missing"
     }
-    New-Item -ItemType HardLink -Path (Join-Path $launcherStage 'clawgod.exe') -Target $stagedExe | Out-Null
-    foreach ($name in @('claude.exe', 'clawgod.exe', 'claude.cmd', 'clawgod.cmd')) {
+    if ($manageClaude) { New-Item -ItemType HardLink -Path (Join-Path $launcherStage 'claude.exe') -Target $stagedExe | Out-Null }
+    foreach ($name in $retiredNames) {
         $target = Join-Path $BinDir $name
         if (Test-Path $target) { Move-Item $target (Join-Path $launcherStage ("old-" + $name)) }
     }
-    foreach ($name in @('claude.exe', 'clawgod.exe')) {
+    foreach ($name in $launcherNames) {
         Move-Item (Join-Path $launcherStage $name) (Join-Path $BinDir $name)
         $published += $name
     }
@@ -795,7 +801,7 @@ try {
     foreach ($name in $published) {
         Move-Item (Join-Path $BinDir $name) (Join-Path $launcherStage $name)
     }
-    foreach ($name in @('claude.exe', 'clawgod.exe', 'claude.cmd', 'clawgod.cmd')) {
+    foreach ($name in $retiredNames) {
         $previous = Join-Path $launcherStage ("old-" + $name)
         if (Test-Path $previous) { Move-Item $previous (Join-Path $BinDir $name) }
     }
@@ -807,7 +813,7 @@ try {
         Remove-Item -Recurse -Force $NativeBinTmpDir -ErrorAction SilentlyContinue
     }
 }
-Write-OK "Commands 'claude.exe' + 'clawgod.exe' -> patched"
+Write-OK "Commands $($launcherNames -join ', ') -> patched"
 
 # --- Ensure BinDir is in PATH -----------------------------------------
 

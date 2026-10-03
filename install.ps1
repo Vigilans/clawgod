@@ -46,187 +46,19 @@ Write-Host "  ClawGod Installer" -ForegroundColor White -NoNewline
 Write-Host " (Windows)" -ForegroundColor DarkGray
 Write-Host ""
 
-# --- Uninstall --------------------------------------------------------
-
-if ($Uninstall) {
-    # Restore original claude
-    $claudeOrig = Join-Path $BinDir "claude.orig.cmd"
-    $claudeCmd  = Join-Path $BinDir "claude.cmd"
-    if (Test-Path $claudeOrig) {
-        Move-Item -Force $claudeOrig $claudeCmd
-        Write-OK "Original claude restored"
-    } elseif ((Test-Path $claudeCmd) -and (Select-String -Path $claudeCmd -Pattern "clawgod" -Quiet -ErrorAction SilentlyContinue)) {
-        Remove-Item -Force $claudeCmd
-        Write-OK "Removed ClawGod launcher ($claudeCmd)"
-    }
-    foreach ($name in @("claude.exe", "clawgod.exe")) {
-        $launcher = Join-Path $BinDir $name
-        if ((Test-Path $launcher) -and (Get-Item $launcher).VersionInfo.FileDescription -eq "ClawGod launcher") {
-            $retired = Join-Path $env:TEMP ("clawgod-uninstall-" + [Guid]::NewGuid().ToString('N') + ".exe")
-            Move-Item $launcher $retired
-            Remove-Item $retired -Force -ErrorAction SilentlyContinue
-        }
-    }
-    # Also check for .exe backup
-    $claudeExeOrig = Join-Path $BinDir "claude.orig.exe"
-    $claudeExe     = Join-Path $BinDir "claude.exe"
-    if (Test-Path $claudeExeOrig) {
-        Move-Item -Force $claudeExeOrig $claudeExe
-        Write-OK "Original claude.exe restored"
-    }
-    # Remove explicit clawgod alias
-    $clawgodCmd = Join-Path $BinDir "clawgod.cmd"
-    if (Test-Path $clawgodCmd) {
-        Remove-Item -Force $clawgodCmd
-        Write-OK "Removed clawgod alias"
-    }
-
-    foreach ($f in @("cli.js","cli.cjs","cli.original.js","cli.original.cjs","cli.original.js.bak","cli.original.cjs.bak","patch.js","patch.mjs","extract-natives.mjs","post-process.mjs","repatch.mjs","openai-proxy.cjs","feature-gates.cjs","runtime-helpers.cjs","bun-ant-shim.cjs","clawgod-import.exe",".source-version","source-backup.json","startup-check.cjs","startup-check.log",".clawgod-version",".update-check","node_modules","bun-runtime","vendor","bunfs","pathmap.json","versions")) {
-        $p = Join-Path $ClawDir $f
-        if (Test-Path $p) { Remove-Item -Recurse -Force $p }
-    }
-    Write-OK "ClawGod uninstalled"
-    Write-Host ""
-    Write-Dim "Restart your terminal for changes to take effect."
-    Write-Host ""
-    exit 0
-}
-
-# --- Prerequisites ----------------------------------------------------
+# --- Feature configuration (also used during uninstall) ----------------
 
 try { $null = Get-Command node -ErrorAction Stop }
 catch {
     Write-Err "Node.js is required (>= 18) for the patcher. Install from https://nodejs.org"
     exit 1
 }
-
 $nodeVer = [int](node -e "console.log(process.versions.node.split('.')[0])")
 if ($nodeVer -lt 18) {
     Write-Err "Node.js >= 18 required (found v$nodeVer)"
     exit 1
 }
-
-# --- Ensure Bun (runtime that executes the patched cli.js) ------------
-
-$BunBin = $null
-try { $BunBin = (Get-Command bun -ErrorAction Stop).Source } catch {}
-if (-not $BunBin) {
-    $homeBun = Join-Path $env:USERPROFILE ".bun\bin\bun.exe"
-    if (Test-Path $homeBun) { $BunBin = $homeBun }
-}
-if (-not $BunBin) {
-    Write-Dim "Installing Bun (required runtime for v2.1.113+ cli.js) ..."
-    try {
-        Invoke-Expression "$(Invoke-RestMethod https://bun.sh/install.ps1)" 2>$null | Out-Null
-    } catch {}
-    $BunBin = Join-Path $env:USERPROFILE ".bun\bin\bun.exe"
-    if (-not (Test-Path $BunBin)) {
-        Write-Err "Bun installation failed. Install manually: https://bun.sh/install"
-        exit 1
-    }
-}
-
-# Resolve bun.ps1 -> bun.exe. When Bun is installed via `npm install -g bun`,
-# Get-Command returns a .ps1 wrapper script. A .cmd launcher cannot invoke .ps1
-# directly -- Windows opens the file association dialog instead of executing it.
-# Probe known install paths instead of parsing wrapper scripts.
-if ($BunBin -and $BunBin -match '\.ps1$') {
-    $resolved = $null
-    $bunDir = Split-Path $BunBin
-    # 1. npm global: bun.ps1 sits next to node_modules/bun/bin/bun.exe
-    $cand = Join-Path $bunDir "node_modules\bun\bin\bun.exe"
-    if (Test-Path $cand) { $resolved = $cand }
-    # 2. bun.sh official install
-    if (-not $resolved) {
-        $cand = Join-Path $env:USERPROFILE ".bun\bin\bun.exe"
-        if (Test-Path $cand) { $resolved = $cand }
-    }
-    # 3. Scoop: shim exe lives in ~/scoop/shims/
-    if (-not $resolved) {
-        $cand = Join-Path $env:USERPROFILE "scoop\shims\bun.exe"
-        if (Test-Path $cand) { $resolved = $cand }
-    }
-    # 4. Chocolatey: typically in C:\ProgramData\chocolatey\bin\
-    if (-not $resolved) {
-        $chocoBin = Join-Path $env:ProgramData "chocolatey\bin\bun.exe"
-        if (Test-Path $chocoBin) { $resolved = $chocoBin }
-    }
-    if ($resolved) {
-        Write-Dim "Resolved bun.ps1 -> $resolved"
-        $BunBin = $resolved
-    } else {
-        Write-Warn "Bun resolved to .ps1 wrapper ($BunBin). The launcher may not work."
-        Write-Warn "Consider installing Bun via bun.sh/install.ps1 for a native bun.exe."
-    }
-}
-Write-OK "Bun: $(& $BunBin --version)"
-
-# --- Bun version pre-flight -------------------------------------------
-# Anthropic builds the native binary with Bun's canary channel; stable
-# bun.sh trails by one version. Bun < 1.3.14 panics on cli.original.cjs
-# with "Expected CommonJS module to have a function wrapper". Refuse
-# early -- no npm download / no patch / no late sanity surprise where
-# PowerShell's NativeCommandError display buries the friendly message.
-# Bump $MinBunVersion when Anthropic moves the embedded Bun forward
-# again.
-
-$MinBunVersion = '1.3.14'
-$BunVersionRaw = ''
-try {
-    $bunOut = & $BunBin --version 2>$null | Select-Object -First 1
-    if ($bunOut) { $BunVersionRaw = "$bunOut".Trim() }
-} catch {}
-$BunVersionNum = ($BunVersionRaw -split '-')[0]
-$BunVersionOk = $false
-try {
-    if ($BunVersionNum) {
-        $BunVersionOk = ([version]$BunVersionNum) -ge ([version]$MinBunVersion)
-    }
-} catch {}
-if (-not $BunVersionOk) {
-    Write-Host ""
-    Write-Err "Bun $BunVersionRaw is below the required minimum ($MinBunVersion)."
-    Write-Err ""
-    Write-Err "  Anthropic builds claude-code with Bun's canary channel. Older Bun"
-    Write-Err "  panics on cli.original.cjs with 'Expected CommonJS module to have"
-    Write-Err "  a function wrapper'. This is a hard requirement, not a warning."
-    Write-Err ""
-    Write-Err "  Upgrade with one of:"
-    Write-Err "    bun upgrade --canary"
-    Write-Err "    powershell -c ""iex & {`$(irm https://bun.sh/install.ps1)} -Version canary"""
-    Write-Err ""
-    Write-Err "  If your bun is from scoop (the binary is behind a shim and refuses"
-    Write-Err "  to self-replace, so 'bun upgrade' silently hangs):"
-    Write-Err "    scoop uninstall bun"
-    Write-Err "    irm https://bun.sh/install.ps1 | iex"
-    Write-Err "    bun upgrade --canary"
-    Write-Err ""
-    Write-Err "  Then re-run this installer."
-    exit 1
-}
-
-# --- ripgrep prerequisite (search/grep tool) --------------------------
-# Hard prerequisite -- without rg the Grep tool inside Claude Code fails.
-
-try {
-    $rgPath = (Get-Command rg -ErrorAction Stop).Source
-    Write-OK "ripgrep: $rgPath"
-}
-catch {
-    Write-Err "ripgrep (rg) is required but not found in PATH."
-    Write-Err "  Claude Code's Grep tool will not function without it."
-    Write-Err ""
-    Write-Err "  Install: winget install BurntSushi.ripgrep.MSVC"
-    Write-Err "       or: scoop install ripgrep"
-    Write-Err "       or: choco install ripgrep"
-    Write-Err ""
-    Write-Err "  Re-run this script after installing rg."
-    exit 1
-}
-
 New-Item -ItemType Directory -Force -Path $ClawDir | Out-Null
-# --- Write patch feature gates -----------------------------------------
-
 @'
 'use strict';
 // Patch feature gates \u2014 computes globalThis.__clawgodPatches before the
@@ -241,6 +73,9 @@ New-Item -ItemType Directory -Force -Path $ClawDir | Out-Null
 //   globalThis.__clawgodPatches?.["<patchId>"] !== false
 // Missing config defaults all gates ON. Invalid configuration stops startup.
 const CLAWGOD_FEATURES_META = {
+  "claude-command": [
+    "claude-command"
+  ],
   "bun-ant-shim": [
     "bun-ant-shim"
   ],
@@ -522,14 +357,180 @@ if (require.main === module && process.argv[2] === '--enabled') {
   process.stdout.write(module.exports.isEnabled(process.argv[3]) ? '1\n' : '0\n');
 }
 '@ | Set-Content (Join-Path $ClawDir "feature-gates.cjs") -Encoding UTF8
-Write-OK "Patch feature gates created (feature-gates.cjs)"
-
 & node (Join-Path $ClawDir "feature-gates.cjs") --check
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 function Test-FeatureEnabled([string]$Name) {
     $value = & node (Join-Path $ClawDir "feature-gates.cjs") --enabled $Name
     if ($LASTEXITCODE -ne 0) { throw "Could not read feature configuration" }
     return $value -eq "1"
+}
+
+# --- Uninstall --------------------------------------------------------
+
+if ($Uninstall) {
+    $manageClaude = Test-FeatureEnabled "claude-command"
+    # Restore original claude
+    $claudeOrig = Join-Path $BinDir "claude.orig.cmd"
+    $claudeCmd  = Join-Path $BinDir "claude.cmd"
+    if ($manageClaude -and (Test-Path $claudeOrig)) {
+        Move-Item -Force $claudeOrig $claudeCmd
+        Write-OK "Original claude restored"
+    } elseif ($manageClaude -and (Test-Path $claudeCmd) -and (Select-String -Path $claudeCmd -Pattern "clawgod" -Quiet -ErrorAction SilentlyContinue)) {
+        Remove-Item -Force $claudeCmd
+        Write-OK "Removed ClawGod launcher ($claudeCmd)"
+    }
+    foreach ($name in @("claude.exe", "clawgod.exe")) {
+        if ($name -eq 'claude.exe' -and -not $manageClaude) { continue }
+        $launcher = Join-Path $BinDir $name
+        if ((Test-Path $launcher) -and (Get-Item $launcher).VersionInfo.FileDescription -eq "ClawGod launcher") {
+            $retired = Join-Path $env:TEMP ("clawgod-uninstall-" + [Guid]::NewGuid().ToString('N') + ".exe")
+            Move-Item $launcher $retired
+            Remove-Item $retired -Force -ErrorAction SilentlyContinue
+        }
+    }
+    # Also check for .exe backup
+    $claudeExeOrig = Join-Path $BinDir "claude.orig.exe"
+    $claudeExe     = Join-Path $BinDir "claude.exe"
+    if ($manageClaude -and (Test-Path $claudeExeOrig)) {
+        Move-Item -Force $claudeExeOrig $claudeExe
+        Write-OK "Original claude.exe restored"
+    }
+    # Remove explicit clawgod alias
+    $clawgodCmd = Join-Path $BinDir "clawgod.cmd"
+    if (Test-Path $clawgodCmd) {
+        Remove-Item -Force $clawgodCmd
+        Write-OK "Removed clawgod alias"
+    }
+
+    foreach ($f in @("cli.js","cli.cjs","cli.original.js","cli.original.cjs","cli.original.js.bak","cli.original.cjs.bak","patch.js","patch.mjs","extract-natives.mjs","post-process.mjs","repatch.mjs","openai-proxy.cjs","feature-gates.cjs","runtime-helpers.cjs","bun-ant-shim.cjs","clawgod-import.exe",".source-version","source-backup.json","startup-check.cjs","startup-check.log",".clawgod-version",".update-check","node_modules","bun-runtime","vendor","bunfs","pathmap.json","versions")) {
+        $p = Join-Path $ClawDir $f
+        if (Test-Path $p) { Remove-Item -Recurse -Force $p }
+    }
+    Write-OK "ClawGod uninstalled"
+    Write-Host ""
+    Write-Dim "Restart your terminal for changes to take effect."
+    Write-Host ""
+    exit 0
+}
+
+# --- Prerequisites ----------------------------------------------------
+
+# --- Ensure Bun (runtime that executes the patched cli.js) ------------
+
+$BunBin = $null
+try { $BunBin = (Get-Command bun -ErrorAction Stop).Source } catch {}
+if (-not $BunBin) {
+    $homeBun = Join-Path $env:USERPROFILE ".bun\bin\bun.exe"
+    if (Test-Path $homeBun) { $BunBin = $homeBun }
+}
+if (-not $BunBin) {
+    Write-Dim "Installing Bun (required runtime for v2.1.113+ cli.js) ..."
+    try {
+        Invoke-Expression "$(Invoke-RestMethod https://bun.sh/install.ps1)" 2>$null | Out-Null
+    } catch {}
+    $BunBin = Join-Path $env:USERPROFILE ".bun\bin\bun.exe"
+    if (-not (Test-Path $BunBin)) {
+        Write-Err "Bun installation failed. Install manually: https://bun.sh/install"
+        exit 1
+    }
+}
+
+# Resolve bun.ps1 -> bun.exe. When Bun is installed via `npm install -g bun`,
+# Get-Command returns a .ps1 wrapper script. A .cmd launcher cannot invoke .ps1
+# directly -- Windows opens the file association dialog instead of executing it.
+# Probe known install paths instead of parsing wrapper scripts.
+if ($BunBin -and $BunBin -match '\.ps1$') {
+    $resolved = $null
+    $bunDir = Split-Path $BunBin
+    # 1. npm global: bun.ps1 sits next to node_modules/bun/bin/bun.exe
+    $cand = Join-Path $bunDir "node_modules\bun\bin\bun.exe"
+    if (Test-Path $cand) { $resolved = $cand }
+    # 2. bun.sh official install
+    if (-not $resolved) {
+        $cand = Join-Path $env:USERPROFILE ".bun\bin\bun.exe"
+        if (Test-Path $cand) { $resolved = $cand }
+    }
+    # 3. Scoop: shim exe lives in ~/scoop/shims/
+    if (-not $resolved) {
+        $cand = Join-Path $env:USERPROFILE "scoop\shims\bun.exe"
+        if (Test-Path $cand) { $resolved = $cand }
+    }
+    # 4. Chocolatey: typically in C:\ProgramData\chocolatey\bin\
+    if (-not $resolved) {
+        $chocoBin = Join-Path $env:ProgramData "chocolatey\bin\bun.exe"
+        if (Test-Path $chocoBin) { $resolved = $chocoBin }
+    }
+    if ($resolved) {
+        Write-Dim "Resolved bun.ps1 -> $resolved"
+        $BunBin = $resolved
+    } else {
+        Write-Warn "Bun resolved to .ps1 wrapper ($BunBin). The launcher may not work."
+        Write-Warn "Consider installing Bun via bun.sh/install.ps1 for a native bun.exe."
+    }
+}
+Write-OK "Bun: $(& $BunBin --version)"
+
+# --- Bun version pre-flight -------------------------------------------
+# Anthropic builds the native binary with Bun's canary channel; stable
+# bun.sh trails by one version. Bun < 1.3.14 panics on cli.original.cjs
+# with "Expected CommonJS module to have a function wrapper". Refuse
+# early -- no npm download / no patch / no late sanity surprise where
+# PowerShell's NativeCommandError display buries the friendly message.
+# Bump $MinBunVersion when Anthropic moves the embedded Bun forward
+# again.
+
+$MinBunVersion = '1.3.14'
+$BunVersionRaw = ''
+try {
+    $bunOut = & $BunBin --version 2>$null | Select-Object -First 1
+    if ($bunOut) { $BunVersionRaw = "$bunOut".Trim() }
+} catch {}
+$BunVersionNum = ($BunVersionRaw -split '-')[0]
+$BunVersionOk = $false
+try {
+    if ($BunVersionNum) {
+        $BunVersionOk = ([version]$BunVersionNum) -ge ([version]$MinBunVersion)
+    }
+} catch {}
+if (-not $BunVersionOk) {
+    Write-Host ""
+    Write-Err "Bun $BunVersionRaw is below the required minimum ($MinBunVersion)."
+    Write-Err ""
+    Write-Err "  Anthropic builds claude-code with Bun's canary channel. Older Bun"
+    Write-Err "  panics on cli.original.cjs with 'Expected CommonJS module to have"
+    Write-Err "  a function wrapper'. This is a hard requirement, not a warning."
+    Write-Err ""
+    Write-Err "  Upgrade with one of:"
+    Write-Err "    bun upgrade --canary"
+    Write-Err "    powershell -c ""iex & {`$(irm https://bun.sh/install.ps1)} -Version canary"""
+    Write-Err ""
+    Write-Err "  If your bun is from scoop (the binary is behind a shim and refuses"
+    Write-Err "  to self-replace, so 'bun upgrade' silently hangs):"
+    Write-Err "    scoop uninstall bun"
+    Write-Err "    irm https://bun.sh/install.ps1 | iex"
+    Write-Err "    bun upgrade --canary"
+    Write-Err ""
+    Write-Err "  Then re-run this installer."
+    exit 1
+}
+
+# --- ripgrep prerequisite (search/grep tool) --------------------------
+# Hard prerequisite -- without rg the Grep tool inside Claude Code fails.
+
+try {
+    $rgPath = (Get-Command rg -ErrorAction Stop).Source
+    Write-OK "ripgrep: $rgPath"
+}
+catch {
+    Write-Err "ripgrep (rg) is required but not found in PATH."
+    Write-Err "  Claude Code's Grep tool will not function without it."
+    Write-Err ""
+    Write-Err "  Install: winget install BurntSushi.ripgrep.MSVC"
+    Write-Err "       or: scoop install ripgrep"
+    Write-Err "       or: choco install ripgrep"
+    Write-Err ""
+    Write-Err "  Re-run this script after installing rg."
+    exit 1
 }
 
 # --- Handle -NoUpgrade (re-patch the installed version) --------------
@@ -2727,6 +2728,7 @@ const CLEAN_SOURCE = join(artifactDir, 'source-backup.json');
 // \u2192 gate passes \u2192 same behavior as before toggles existed.
 
 const FEATURES = {
+  'claude-command': { desc: 'Manage the claude command entry', patchIds: [], runtimeIds: ["claude-command"] },
   'bun-ant-shim': { desc: 'Bun.ant.CellSegmenter renderer shim', patchIds: [], runtimeIds: ["bun-ant-shim"] },
   'anthropic-user-type': { desc: 'anthropic-user-type', patchIds: ["user-type-ant"] },
   'features-config': { desc: 'features-config', patchIds: ["growthbook-env-overrides","growthbook-env-overrides-graph","growthbook-config-overrides"], runtimeIds: ["features-config"] },
@@ -4343,6 +4345,7 @@ if (-not (Test-Path $importBin)) {
 }
 
 # Find and back up original claude
+$manageClaude = Test-FeatureEnabled "claude-command"
 $claudeCmd = Join-Path $BinDir "claude.cmd"
 $claudeOrigCmd = Join-Path $BinDir "claude.orig.cmd"
 $claudeOrigExe = Join-Path $BinDir "claude.orig.exe"
@@ -4355,6 +4358,7 @@ foreach ($loc in @(
     (Join-Path $env:USERPROFILE ".local\share\claude\versions"),
     (Join-Path $env:LOCALAPPDATA "Programs\claude-code")
 )) {
+    if (-not $manageClaude -and $loc -in @((Join-Path $BinDir "claude.exe"), $claudeCmd)) { continue }
     if (Test-Path $loc) {
         # Reinstalling must not back up our own launcher as the original.
         # Continue searching versions/ if no native executable was found yet.
@@ -4412,7 +4416,13 @@ $launcherSource = $launcherSource.Replace('__CLAUDE_ORIG__', ($claudeOrigExe | C
 $launcherSource = $launcherSource.Replace('__BUN_BIN__', ($BunBin | ConvertTo-Json -Compress))
 $launcherScript = Join-Path $launcherStage 'launcher.cjs'
 [System.IO.File]::WriteAllText($launcherScript, $launcherSource, (New-Object System.Text.UTF8Encoding $false))
-$stagedExe = Join-Path $launcherStage 'claude.exe'
+$stagedExe = Join-Path $launcherStage 'clawgod.exe'
+$launcherNames = @('clawgod.exe')
+$retiredNames = @('clawgod.exe', 'clawgod.cmd')
+if ($manageClaude) {
+    $launcherNames += 'claude.exe'
+    $retiredNames += @('claude.exe', 'claude.cmd')
+}
 $published = @()
 $installed = $false
 try {
@@ -4432,12 +4442,12 @@ try {
     if ((Get-Item $stagedExe).VersionInfo.FileDescription -ne "ClawGod launcher") {
         throw "Native launcher identification missing"
     }
-    New-Item -ItemType HardLink -Path (Join-Path $launcherStage 'clawgod.exe') -Target $stagedExe | Out-Null
-    foreach ($name in @('claude.exe', 'clawgod.exe', 'claude.cmd', 'clawgod.cmd')) {
+    if ($manageClaude) { New-Item -ItemType HardLink -Path (Join-Path $launcherStage 'claude.exe') -Target $stagedExe | Out-Null }
+    foreach ($name in $retiredNames) {
         $target = Join-Path $BinDir $name
         if (Test-Path $target) { Move-Item $target (Join-Path $launcherStage ("old-" + $name)) }
     }
-    foreach ($name in @('claude.exe', 'clawgod.exe')) {
+    foreach ($name in $launcherNames) {
         Move-Item (Join-Path $launcherStage $name) (Join-Path $BinDir $name)
         $published += $name
     }
@@ -4446,7 +4456,7 @@ try {
     foreach ($name in $published) {
         Move-Item (Join-Path $BinDir $name) (Join-Path $launcherStage $name)
     }
-    foreach ($name in @('claude.exe', 'clawgod.exe', 'claude.cmd', 'clawgod.cmd')) {
+    foreach ($name in $retiredNames) {
         $previous = Join-Path $launcherStage ("old-" + $name)
         if (Test-Path $previous) { Move-Item $previous (Join-Path $BinDir $name) }
     }
@@ -4458,7 +4468,7 @@ try {
         Remove-Item -Recurse -Force $NativeBinTmpDir -ErrorAction SilentlyContinue
     }
 }
-Write-OK "Commands 'claude.exe' + 'clawgod.exe' -> patched"
+Write-OK "Commands $($launcherNames -join ', ') -> patched"
 
 # --- Ensure BinDir is in PATH -----------------------------------------
 

@@ -158,6 +158,7 @@ The installer converts an existing `{"enabled":[...]}` capability allowlist to f
 
 | Feature id | Controls |
 |------------|----------|
+| `claude-command` | Installer ownership of the `claude` entry; disabled preserves an externally managed entry during installation, updates and uninstall, while maintaining `clawgod` and its native backup |
 | `agent-teams` | Agent Teams always enabled |
 | `computer-use` | Computer Use unlock |
 | `ultraplan` | Ultraplan slash command |

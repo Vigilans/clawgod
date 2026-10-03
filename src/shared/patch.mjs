@@ -43,6 +43,7 @@ const CLEAN_SOURCE = join(artifactDir, 'source-backup.json');
 // → gate passes → same behavior as before toggles existed.
 
 const FEATURES = {
+  'claude-command': { desc: 'Manage the claude command entry', patchIds: [], runtimeIds: ["claude-command"] },
   'bun-ant-shim': { desc: 'Bun.ant.CellSegmenter renderer shim', patchIds: [], runtimeIds: ["bun-ant-shim"] },
   'anthropic-user-type': { desc: 'anthropic-user-type', patchIds: ["user-type-ant"] },
   'features-config': { desc: 'features-config', patchIds: ["growthbook-env-overrides","growthbook-env-overrides-graph","growthbook-config-overrides"], runtimeIds: ["features-config"] },
