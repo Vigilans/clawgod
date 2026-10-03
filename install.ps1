@@ -2813,7 +2813,7 @@ const patches = [
     id: 'custom-alias-env-write',
     toggleable: true,
     name: 'Allow custom alias env vars (BKt write gate, >=2.1.218)',
-    pattern: /function ([\w$]+)\(([\w$]+),([\w$]+)\)\{let ([\w$]+)=\2\.toUpperCase\(\);return ([\w$]+)\.has\(\4\)\|\|([\w$]+)\.has\(\4\)&&([\w$]+)\(\3\)(?:\|\|[\w$]+\.has\(\4\)&&[\w$]+\(\3\)\|\|\4==="ANTHROPIC_CUSTOM_HEADERS"&&![\w$]+\(\3\))?\}/g,
+    pattern: /function ([\w$]+)\(([\w$]+),([\w$]+)\)\{let ([\w$]+)=\2\.toUpperCase\(\);return ([\w$]+)\.has\(\4\)\|\|(?:([\w$]+)\.has\(\4\)&&([\w$]+)\(\3\)(?:\|\|[\w$]+\.has\(\4\)&&[\w$]+\(\3\)\|\|\4==="ANTHROPIC_CUSTOM_HEADERS"&&![\w$]+\(\3\))?|[\w$]+\(\4,\3\)\|\|\4==="ANTHROPIC_CUSTOM_HEADERS"&&![\w$]+\(\3\))\}/g,
     replacer: (m, fn, key, val, upper) =>
       m.slice(0, -1) +
       `||${gate('custom-alias-env-write')}&&/^ANTHROPIC_DEFAULT_[A-Z0-9_]+_(?:MODEL|NAME|DESCRIPTION|SUPPORTED_CAPABILITIES)$/.test(${upper})}`,
