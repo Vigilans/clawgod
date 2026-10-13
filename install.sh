@@ -9350,7 +9350,7 @@ const patches = [
     name: 'Extend Agent model schema with custom aliases',
     pattern: new RegExp(
       'model:([\\w$]+(?:\\.enum)?)\\(\\["sonnet","opus","haiku","fable"\\]\\)' +
-      '\\.optional\\(\\)\\.describe\\(([\\s\\S]{1,1000}?)\\)(?=,run_in_background:)',
+      '\\.optional\\(\\)\\.describe\\(([\\s\\S]{1,1000}?)\\)(?=,(?:effort|run_in_background):)',
       'g'
     ),
     replacer: (m, schema, description) => {
@@ -9583,7 +9583,7 @@ const patches = [
       '[\\s\\S]{0,400}?toolUseContext:([\\w$]+),' +
       '[\\s\\S]{0,400}?model:([\\w$]+),' +
       '[\\s\\S]{0,1200}?\\}\\)\\{' +
-      'let (?:[\\w$]+=[\\w$]+\\?\\?\\2\\.session,)?([\\w$]+)=[\\w$]+\\(\\2\\),([\\w$]+)=\\4\\.mode,' +
+      '[\\s\\S]{0,1000}?let (?:[\\w$]+=[\\w$]+\\?\\?\\2\\.session,)?([\\w$]+)=[\\w$]+\\(\\2\\),([\\w$]+)=\\4\\.mode,' +
       '[\\s\\S]{0,300}?([\\w$]+)=[\\w$]+\\(' +
       '[^;=]{0,300}?,\\3,\\5,' +
       '[\\s\\S]{0,16000}?\\{agentType:\\1\\.agentType,(?!model:)' +
