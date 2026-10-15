@@ -1282,12 +1282,14 @@ const isChunked = existsSync(pathMapFile);
 // first import (ESM) \u2014 any preceding comment breaks that detection.
 function stripPragma(c) { return c.replace(/^(?:\/\/[^\n]*\n)+/, ''); }
 
-// build-time fileURLToPath() leaks \u2192 use cli.cjs's own __filename
+// Repair file URLs that only work inside Bun's original bundle.
 function fixFileURLs(c) {
-  return c.replace(
-    /[\w$]+\.fileURLToPath\("file:\/\/\/home\/runner\/work\/claude-cli-internal\/claude-cli-internal\/[^"]*"\)/g,
-    () => '__filename',
-  );
+  return c
+    .replace(
+      /[\w$]+\.fileURLToPath\("file:\/\/\/home\/runner\/work\/claude-cli-internal\/claude-cli-internal\/[^"]*"\)/g,
+      () => '__filename',
+    )
+    .replace(/new URL\(`file:\/\/\$\{([\w$]+)\}`\)/g, 'new URL($1, import.meta.url)');
 }
 
 // Embedded text requires return strings in the native bundle. Bun's disk
