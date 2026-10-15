@@ -30,7 +30,7 @@ const BUN_SECTION_NAME    = '.bun';
 const OFFSET_STRUCT_SIZE  = 32;
 const MODULE_RECORD_SIZE  = 52;
 
-// loader id → name (subset; only `napi` is acted on, rest informational)
+// loader id → name
 const LOADERS = {
   0:'jsx', 1:'js', 2:'ts', 3:'tsx', 4:'css', 5:'file', 6:'json', 7:'jsonc',
   8:'toml', 9:'wasm', 10:'napi', 11:'base64', 12:'dataurl', 13:'text',
@@ -344,6 +344,8 @@ function main() {
     const mm = n.match(BUN_MOUNT_RE);
     return mm ? n.slice(mm[0].length) : null;
   };
+  const flatGraphName = (m, sub) =>
+    sub.replace(/\//g, '__') + (m.loader === 'text' ? '.clawgod-text' : '');
   const isChunked = !!entryMod &&
     !entryText.includes('(function(exports, require, module') &&
     (entryText.includes('import{') || BUN_MOUNT_RE.test(entryText));
@@ -379,7 +381,7 @@ function main() {
       // (Windows single-drive) specifiers.
       const sub = bunSub(m.name);
       if (!sub) { dropped++; continue; }
-      const flat = sub.replace(/\//g, '__');
+      const flat = flatGraphName(m, sub);
       mkdirSync(graphDir, { recursive: true });
       writeFileSync(join(graphDir, flat), m.content);
       console.log(`  chunk    ${(m.content.length / 1024).toFixed(0).padStart(6)} KB → bunfs/${flat}`);
@@ -408,7 +410,7 @@ function main() {
         const base = napiBasename(m.name);
         pathMap[normName] = `vendor/${base}/${platDir}/${base}.node`;
       } else {
-        pathMap[normName] = `bunfs/${sub.replace(/\//g, '__')}`;
+        pathMap[normName] = `bunfs/${flatGraphName(m, sub)}`;
       }
     }
     writeFileSync(join(outputDir, 'pathmap.json'), JSON.stringify(pathMap, null, 0) + '\n');

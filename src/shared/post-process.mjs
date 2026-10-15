@@ -34,7 +34,7 @@ function fixTextRequires(c, sourcePath) {
   const textRoot = JSON.stringify(relative(dirname(sourcePath), join(artifactDir, 'bunfs')));
   return c.replace(/\b([\w$]+)=import\.meta\.require(?=[,;])/g, (_match, name) =>
     `${name} = (id) => {
-      if (/\\.(?:txt|md)$/.test(id)) {
+      if (id.endsWith('.clawgod-text')) {
         const fs = import.meta.require('node:fs');
         const path = import.meta.require('node:path');
         const sourceDir = import.meta.dir;
