@@ -55,7 +55,7 @@ const FEATURES = {
   'update-notification': { desc: 'update-notification', patchIds: [], runtimeIds: ["update-notification"] },
   'remove-attribution-header': { desc: 'remove-attribution-header', patchIds: [], runtimeIds: ["remove-attribution-header"] },
   'custom-model-aliases': { desc: 'custom-model-aliases', patchIds: ["custom-alias-env-write","custom-alias-env","custom-alias-schema","custom-alias-picker","custom-alias-command","custom-alias-resolve"] },
-  'hook-update-agent-model': { desc: 'hook-update-agent-model', patchIds: ["hook-input-validation","hook-input-origin","hook-permission-validation"] },
+  'hook-update-agent-model': { desc: 'hook-update-agent-model', patchIds: ["hook-input-validation","hook-input-validation-v2","hook-input-origin","hook-permission-validation"] },
   'send-message-resume-model': { desc: 'send-message-resume-model', patchIds: ["agent-model-metadata","agent-model-restore","agent-model-query"] },
   'agent-teams':    { desc: 'Agent Teams always enabled',
                       patchIds: ['agent-teams', 'agent-teams-graph'] },
@@ -315,6 +315,21 @@ const patches = [
       ),
     unique: true,
     sentinel: 'returned updatedInput that failed schema validation',
+    optional: true,  // v2.1.300+ routes rewrites through the shared checker below
+  },
+  {
+    id: 'hook-input-validation-v2',
+    toggleable: true,
+    name: 'Bypass Agent PreToolUse updatedInput schema validation (shared checker)',
+    pattern: /if\(([\w$]+)!==void 0\)\{let ([\w$]+)=await ([\w$]+)\(([\w$]+),\1,\{event:"PreToolUse",/g,
+    replacer: (m, input, _checked, checker, tool) => {
+      const schemaTool =
+        `(${gate('hook-input-validation-v2')}&&${tool}.name==="Agent"?` +
+        `{...${tool},inputSchema:{safeParse:(_cgInput)=>({success:true,data:_cgInput})}}:${tool})`;
+      return m.replace(`${checker}(${tool},${input},`, `${checker}(${schemaTool},${input},`);
+    },
+    unique: true,
+    sentinel: "The tool input from the model was valid; the hook's rewrite of it was not.",
   },
   {
     // A second updatedInput validation path after permission handling first
